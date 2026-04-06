@@ -1,0 +1,172 @@
+using MinuteOS.Cli.Build;
+
+namespace MinuteOS.Cli.Tests;
+
+public class ProjectLayoutTests : IDisposable
+{
+    private readonly string _tempDir;
+
+    public ProjectLayoutTests()
+    {
+        _tempDir = Path.Combine(Path.GetTempPath(), $"minuteos-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_tempDir);
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_tempDir))
+            Directory.Delete(_tempDir, true);
+    }
+
+    private void CreateDir(string relativePath)
+    {
+        Directory.CreateDirectory(Path.Combine(_tempDir, relativePath));
+    }
+
+    private void WriteFile(string relativePath, string content)
+    {
+        var path = Path.Combine(_tempDir, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content);
+    }
+
+    [Fact]
+    public void Constructor_FindsLibRoots()
+    {
+        CreateDir("lib");
+        CreateDir("lib-arm");
+        CreateDir("not-a-lib");
+
+        var layout = new ProjectLayout(_tempDir);
+
+        Assert.Equal(2, layout.LibRoots.Count);
+        Assert.Contains(layout.LibRoots, r => r.EndsWith("lib"));
+        Assert.Contains(layout.LibRoots, r => r.EndsWith("lib-arm"));
+    }
+
+    [Fact]
+    public void Constructor_FindsTargetRoots()
+    {
+        CreateDir("targets");
+        CreateDir("lib/targets");
+        CreateDir("lib-arm/targets");
+
+        var layout = new ProjectLayout(_tempDir);
+
+        Assert.Equal(3, layout.TargetRoots.Count);
+    }
+
+    [Fact]
+    public void ResolveTargetDirs_FindsExistingDirs()
+    {
+        CreateDir("lib/targets/host");
+        CreateDir("lib/targets/all");
+
+        var layout = new ProjectLayout(_tempDir);
+        var dirs = layout.ResolveTargetDirs(["host", "all"]);
+
+        Assert.Equal(2, dirs.Count);
+    }
+
+    [Fact]
+    public void ResolveTargetDirs_SkipsMissingDirs()
+    {
+        CreateDir("lib/targets/host");
+
+        var layout = new ProjectLayout(_tempDir);
+        var dirs = layout.ResolveTargetDirs(["host", "nonexistent"]);
+
+        Assert.Single(dirs); // only host found, nonexistent skipped, all not found either
+    }
+
+    [Fact]
+    public void ResolveTargetChain_FollowsInheritance()
+    {
+        CreateDir("lib/targets/all");
+        CreateDir("lib/targets/cmsis");
+        CreateDir("lib/targets/cortex-m");
+        CreateDir("lib/targets/cortex-m3");
+
+        WriteFile("lib/targets/cortex-m3/Include.mk", "TARGETS += cortex-m\n");
+        WriteFile("lib/targets/cortex-m/Include.mk", "TARGETS += cmsis\n");
+
+        var layout = new ProjectLayout(_tempDir);
+        var chain = layout.ResolveTargetChain("cortex-m3", out _);
+
+        // Should be: cmsis, cortex-m, cortex-m3, all
+        Assert.Equal(4, chain.Count);
+        Assert.Equal("cmsis", chain[0]);
+        Assert.Equal("cortex-m", chain[1]);
+        Assert.Equal("cortex-m3", chain[2]);
+        Assert.Equal("all", chain[3]);
+    }
+
+    [Fact]
+    public void ResolveTargetChain_UsesTargetYaml()
+    {
+        CreateDir("lib/targets/all");
+        CreateDir("lib/targets/parent");
+        CreateDir("lib/targets/child");
+
+        WriteFile("lib/targets/child/target.yaml", "requires:\n  - parent\n");
+
+        var layout = new ProjectLayout(_tempDir);
+        var chain = layout.ResolveTargetChain("child", out var meta);
+
+        Assert.Equal(3, chain.Count);
+        Assert.Equal("parent", chain[0]);
+        Assert.Equal("child", chain[1]);
+        Assert.Equal("all", chain[2]);
+        Assert.True(meta.ContainsKey("child"));
+    }
+
+    [Fact]
+    public void ResolveTargetChain_MultipleParents()
+    {
+        CreateDir("lib/targets/all");
+        CreateDir("lib/targets/a");
+        CreateDir("lib/targets/b");
+        CreateDir("lib/targets/child");
+
+        WriteFile("lib/targets/child/Include.mk", "TARGETS += a b\n");
+
+        var layout = new ProjectLayout(_tempDir);
+        var chain = layout.ResolveTargetChain("child", out _);
+
+        Assert.Equal(4, chain.Count);
+        Assert.Contains("a", chain);
+        Assert.Contains("b", chain);
+        Assert.Contains("child", chain);
+        Assert.Equal("all", chain[^1]);
+    }
+
+    [Fact]
+    public void ResolveComponentDirs_FindsAcrossTargetDirs()
+    {
+        CreateDir("lib/targets/host/kernel");
+        CreateDir("lib/targets/all/kernel");
+        CreateDir("lib/targets/all/base");
+
+        var layout = new ProjectLayout(_tempDir);
+        var targetDirs = layout.ResolveTargetDirs(["host", "all"]);
+
+        var componentDirs = layout.ResolveComponentDirs(targetDirs, ["kernel", "base"]);
+
+        // kernel in host + all, base in all
+        Assert.Equal(3, componentDirs.Count);
+    }
+
+    [Fact]
+    public void Name_DefaultsToDirectoryName()
+    {
+        var layout = new ProjectLayout(_tempDir);
+        Assert.Equal(Path.GetFileName(_tempDir), layout.Name);
+    }
+
+    [Fact]
+    public void Name_CanBeOverridden()
+    {
+        var layout = new ProjectLayout(_tempDir, "my-project");
+        Assert.Equal("my-project", layout.Name);
+    }
+}
