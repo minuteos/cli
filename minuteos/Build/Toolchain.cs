@@ -101,7 +101,14 @@ public class Toolchain
 
         args.AddRange(objectFiles.Order());
 
-        // Library search paths
+        // Linker script
+        if (config.LdScript != null)
+            args.AddRange(["-T", config.LdScript]);
+
+        // Library search paths: target link dirs, target dirs, component dirs, source dir
+        foreach (var dir in config.LinkDirs)
+            args.AddRange(["-L", dir]);
+
         var libDirs = config.TargetDirs.Concat(config.ComponentDirs);
         if (Directory.Exists(config.Layout.SourceDir))
             libDirs = new[] { config.Layout.SourceDir }.Concat(libDirs);

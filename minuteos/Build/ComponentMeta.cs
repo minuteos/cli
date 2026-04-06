@@ -48,6 +48,14 @@ public class ComponentMeta
     public List<string>? LinkFlags { get; set; }
 
     /// <summary>
+    /// Additional source directories (relative to the lib root, supports glob patterns).
+    /// Used by wrapper components like fatfs/lvgl that reference external source trees.
+    /// Example: "../../../fatfs/source/" or "../../lvgl/src/draw/sw/blend/"
+    /// </summary>
+    [YamlMember(Alias = "source-dirs")]
+    public List<string>? SourceDirs { get; set; }
+
+    /// <summary>
     /// Build steps contributed by this component.
     /// Each entry references a step by name, optionally with configuration.
     /// </summary>

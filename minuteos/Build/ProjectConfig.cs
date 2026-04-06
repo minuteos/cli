@@ -105,7 +105,19 @@ public class ConfigurationProfile
     public List<string>? CxxFlags { get; set; }
 
     /// <summary>
-    /// Build steps to run. Components also contribute steps via component.yaml.
+    /// Primary output extension (e.g. ".elf", ".axf").
+    /// </summary>
+    [YamlMember(Alias = "primary-ext")]
+    public string? PrimaryExt { get; set; }
+
+    /// <summary>
+    /// Linker script file name.
+    /// </summary>
+    [YamlMember(Alias = "ld-script")]
+    public string? LdScript { get; set; }
+
+    /// <summary>
+    /// Build steps to run. Components and targets also contribute steps.
     /// </summary>
     public List<StepReference>? Steps { get; set; }
 
@@ -125,6 +137,8 @@ public class ConfigurationProfile
         IncludeDirs = other.IncludeDirs ?? IncludeDirs,
         CFlags = other.CFlags ?? CFlags,
         CxxFlags = other.CxxFlags ?? CxxFlags,
+        PrimaryExt = other.PrimaryExt ?? PrimaryExt,
+        LdScript = other.LdScript ?? LdScript,
         Steps = other.Steps ?? Steps,
     };
 }

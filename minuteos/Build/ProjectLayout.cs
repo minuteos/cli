@@ -1,14 +1,15 @@
+using System.Text.RegularExpressions;
+
 namespace MinuteOS.Cli.Build;
 
 /// <summary>
 /// Discovers and represents the layout of a minuteos project on disk.
-/// Mirrors the directory conventions from Base.mk:
 /// - Project root contains lib* directories (LIB_ROOTS)
 /// - Each lib root and project root has a targets/ directory (TARGET_ROOTS)
 /// - Target directories contain component directories
 /// - Project source is in src/
 /// </summary>
-public class ProjectLayout
+public partial class ProjectLayout
 {
     public string ProjectRoot { get; }
     public string Name { get; }
@@ -22,14 +23,12 @@ public class ProjectLayout
         Name = name ?? Path.GetFileName(ProjectRoot);
         SourceDir = Path.Combine(ProjectRoot, "src");
 
-        // Find lib* directories (LIB_ROOTS)
         LibRoots = Directory.Exists(ProjectRoot)
             ? Directory.GetDirectories(ProjectRoot, "lib*")
                 .Where(Directory.Exists)
                 .ToList()
             : [];
 
-        // Find targets/ directories in project root and lib roots (TARGET_ROOTS)
         var targetRoots = new List<string>();
         foreach (var root in new[] { ProjectRoot }.Concat(LibRoots))
         {
@@ -41,21 +40,89 @@ public class ProjectLayout
     }
 
     /// <summary>
-    /// Resolves the active target directories for a given set of targets.
-    /// Targets are resolved in order, with "all" always appended.
-    /// Each target name maps to subdirectories under each TARGET_ROOT.
+    /// Resolves the full target chain including parent targets via recursive resolution.
+    /// Returns target names in dependency order, with "all" always last.
+    /// Also collects TargetMeta for each resolved target.
+    /// </summary>
+    public List<string> ResolveTargetChain(string primaryTarget, out Dictionary<string, TargetMeta> targetMetadata)
+    {
+        var resolved = new List<string>();
+        var seen = new HashSet<string>();
+        var metadata = new Dictionary<string, TargetMeta>();
+
+        ResolveTarget(primaryTarget, resolved, seen, metadata);
+
+        // "all" is always included last
+        if (seen.Add("all"))
+            resolved.Add("all");
+
+        targetMetadata = metadata;
+        return resolved;
+    }
+
+    private void ResolveTarget(string target, List<string> resolved, HashSet<string> seen, Dictionary<string, TargetMeta> metadata)
+    {
+        if (!seen.Add(target))
+            return;
+
+        // Try to load target.yaml from any target root
+        TargetMeta? meta = null;
+        List<string>? parentTargets = null;
+
+        foreach (var root in TargetRoots)
+        {
+            var dir = Path.Combine(root, target);
+            if (!Directory.Exists(dir))
+                continue;
+
+            var loaded = TargetMeta.TryLoad(dir, target);
+            if (loaded != null)
+            {
+                meta = loaded;
+                parentTargets = loaded.Requires;
+                break;
+            }
+
+            // Fallback: parse Include.mk for TARGETS +=
+            parentTargets ??= ParseIncludeMkTargets(dir);
+        }
+
+        if (meta != null)
+            metadata[target] = meta;
+
+        // Resolve parent targets first (dependencies before dependents)
+        if (parentTargets != null)
+        {
+            foreach (var parent in parentTargets)
+                ResolveTarget(parent, resolved, seen, metadata);
+        }
+
+        resolved.Add(target);
+    }
+
+    private List<string>? ParseIncludeMkTargets(string targetDir)
+    {
+        var includeMk = Path.Combine(targetDir, "Include.mk");
+        if (!File.Exists(includeMk))
+            return null;
+
+        var content = File.ReadAllText(includeMk);
+        var targets = new List<string>();
+        foreach (var match in TargetsRegex().Matches(content).AsEnumerable())
+        {
+            var values = match.Groups[1].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            targets.AddRange(values);
+        }
+        return targets.Count > 0 ? targets : null;
+    }
+
+    /// <summary>
+    /// Resolves target directories from resolved target names.
     /// </summary>
     public List<string> ResolveTargetDirs(IEnumerable<string> targets)
     {
-        var allTargets = targets
-            .Where(t => t != "all")
-            .Append("all")
-            .Distinct()
-            .ToList();
-
         var dirs = new List<string>();
-        // subdirs2 semantics: prefer order of second argument (targets), iterate target roots for each
-        foreach (var target in allTargets)
+        foreach (var target in targets)
         {
             foreach (var root in TargetRoots)
             {
@@ -69,12 +136,10 @@ public class ProjectLayout
 
     /// <summary>
     /// Resolves the component directories from target directories.
-    /// Components are subdirectories under target dirs.
     /// </summary>
     public List<string> ResolveComponentDirs(IReadOnlyList<string> targetDirs, IEnumerable<string> components)
     {
         var dirs = new List<string>();
-        // subdirs2 semantics: prefer order of second argument (components)
         foreach (var component in components)
         {
             foreach (var targetDir in targetDirs)
@@ -86,4 +151,7 @@ public class ProjectLayout
         }
         return dirs;
     }
+
+    [GeneratedRegex(@"TARGETS\s*\+=\s*(.+)$", RegexOptions.Multiline)]
+    private static partial Regex TargetsRegex();
 }

@@ -46,6 +46,7 @@ public class InfoCommand : LoggingCommand
 
             Console.WriteLine($"=== {configName} ===");
             Console.WriteLine($"  Target:       {config.Target}");
+            Console.WriteLine($"  Targets:      {string.Join(" -> ", config.Targets)}");
             Console.WriteLine($"  Config:       {config.Config}");
             Console.WriteLine($"  Output:       {config.PrimaryOutput}");
             Console.WriteLine($"  Toolchain:    {config.Profile.ToolchainPrefix ?? "(default)"}");
@@ -55,6 +56,10 @@ public class InfoCommand : LoggingCommand
 
             if (config.Profile.ArchFlags is { Count: > 0 } archFlags)
                 Console.WriteLine($"  Arch flags:   {string.Join(" ", archFlags)}");
+            if (config.LdScript != null)
+                Console.WriteLine($"  LD script:    {config.LdScript}");
+            if (config.StepRefs.Count > 0)
+                Console.WriteLine($"  Steps:        {string.Join(", ", config.StepRefs.Select(s => s.Name))}");
 
             Console.WriteLine();
         }
