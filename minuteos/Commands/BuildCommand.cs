@@ -1,4 +1,5 @@
 using MinuteOS.Cli.Build;
+using MinuteOS.Cli.Build.Steps;
 using triaxis.CommandLine;
 
 namespace MinuteOS.Cli.Commands;
@@ -60,8 +61,9 @@ public class BuildCommand : LoggingCommand
             }
 
             var toolchain = new Toolchain(config.Profile.ToolchainPrefix ?? "", Logger);
+            var stepRegistry = StepRegistry.CreateDefault();
             var parallelism = Jobs > 0 ? Jobs : Environment.ProcessorCount;
-            var runner = new BuildRunner(toolchain, Logger);
+            var runner = new BuildRunner(toolchain, stepRegistry, Logger);
 
             if (!await runner.BuildAsync(config, parallelism, cancellationToken))
                 success = false;

@@ -1,18 +1,22 @@
 using Microsoft.Extensions.Logging;
+using MinuteOS.Cli.Build.Steps;
 
 namespace MinuteOS.Cli.Build;
 
 /// <summary>
-/// Orchestrates the build process: compiles sources and links the output.
+/// Orchestrates the full build pipeline:
+/// PreBuild steps -> Compile -> PreLink steps -> Link -> PostBuild steps
 /// </summary>
 public class BuildRunner
 {
     private readonly Toolchain _toolchain;
+    private readonly StepRegistry _stepRegistry;
     private readonly ILogger _logger;
 
-    public BuildRunner(Toolchain toolchain, ILogger logger)
+    public BuildRunner(Toolchain toolchain, StepRegistry stepRegistry, ILogger logger)
     {
         _toolchain = toolchain;
+        _stepRegistry = stepRegistry;
         _logger = logger;
     }
 
@@ -24,26 +28,50 @@ public class BuildRunner
         _logger.LogInformation("Components:   {Components}", string.Join(", ", config.Components));
         _logger.LogInformation("Sources:      {Count} files", config.Sources.Count);
         _logger.LogInformation("Output:       {Output}", config.PrimaryOutput);
+
+        if (config.StepRefs.Count > 0)
+            _logger.LogInformation("Steps:        {Steps}", string.Join(", ", config.StepRefs.Select(s => s.Name)));
+
         _logger.LogInformation("");
 
-        if (config.Sources.Count == 0)
+        // Resolve steps by phase
+        var stepsByPhase = ResolveSteps(config);
+
+        // Build state accumulates contributions from steps
+        var state = new BuildState();
+
+        // === PreBuild phase ===
+        if (!await RunStepsAsync(BuildPhase.PreBuild, stepsByPhase, config, state, cancellationToken))
+            return false;
+
+        // Merge step contributions into sources and defines
+        var allSources = new List<SourceFile>(config.Sources);
+        allSources.AddRange(state.GeneratedSources);
+
+        var allDefines = new List<string>(config.Defines);
+        allDefines.AddRange(state.ExtraDefines);
+
+        if (allSources.Count == 0)
         {
             _logger.LogWarning("No source files found.");
             return false;
         }
 
-        // Compile phase
-        _logger.LogInformation("Compiling...");
+        // === Compile phase ===
+        _logger.LogInformation("Compiling {Count} files...", allSources.Count);
 
         var objectFiles = new List<string>();
         var compileTasks = new List<(SourceFile Source, string ObjectPath)>();
 
-        foreach (var source in config.Sources)
+        foreach (var source in allSources)
         {
             var objPath = config.GetObjectPath(source);
             compileTasks.Add((source, objPath));
             objectFiles.Add(objPath);
         }
+
+        // Add any extra objects from steps
+        objectFiles.AddRange(state.ExtraObjects);
 
         var semaphore = new SemaphoreSlim(parallelism);
         var errors = new List<string>();
@@ -53,11 +81,8 @@ public class BuildRunner
             await semaphore.WaitAsync(cancellationToken);
             try
             {
-                // Ensure output directory exists
-                var objDir = Path.GetDirectoryName(item.ObjectPath)!;
-                Directory.CreateDirectory(objDir);
+                Directory.CreateDirectory(Path.GetDirectoryName(item.ObjectPath)!);
 
-                // Check if rebuild is needed
                 if (!NeedsRebuild(item.Source.FullPath, item.ObjectPath))
                 {
                     _logger.LogDebug("Skipping (up-to-date): {Source}", item.Source.RelativePath);
@@ -94,13 +119,21 @@ public class BuildRunner
             return false;
         }
 
-        // Link phase
+        // === PreLink phase ===
+        if (!await RunStepsAsync(BuildPhase.PreLink, stepsByPhase, config, state, cancellationToken))
+            return false;
+
+        // === Link phase ===
         _logger.LogInformation("");
         _logger.LogInformation("Linking...");
 
         Directory.CreateDirectory(Path.GetDirectoryName(config.PrimaryOutput)!);
 
-        var linkResult = await _toolchain.LinkAsync(objectFiles, config.PrimaryOutput, config, cancellationToken);
+        var linkResult = await _toolchain.LinkAsync(
+            objectFiles, config.PrimaryOutput, config,
+            state.ExtraLinkFlags.Count > 0 ? state.ExtraLinkFlags : null,
+            cancellationToken);
+
         if (!string.IsNullOrWhiteSpace(linkResult.StdErr))
             _logger.LogWarning("{StdErr}", linkResult.StdErr.TrimEnd());
 
@@ -110,13 +143,76 @@ public class BuildRunner
             return false;
         }
 
-        // Size report
-        var sizeResult = await _toolchain.SizeAsync(config.PrimaryOutput, cancellationToken);
-        if (sizeResult.Success && !string.IsNullOrWhiteSpace(sizeResult.StdOut))
-            _logger.LogInformation("\n{Size}", sizeResult.StdOut.TrimEnd());
+        // === PostBuild phase ===
+        if (!await RunStepsAsync(BuildPhase.PostBuild, stepsByPhase, config, state, cancellationToken))
+            return false;
 
         _logger.LogInformation("");
         _logger.LogInformation("Build succeeded: {Output}", config.PrimaryOutput);
+        return true;
+    }
+
+    private Dictionary<BuildPhase, List<(IBuildStep Step, StepReference Ref)>> ResolveSteps(BuildConfiguration config)
+    {
+        var result = new Dictionary<BuildPhase, List<(IBuildStep, StepReference)>>();
+
+        foreach (var stepRef in config.StepRefs)
+        {
+            var step = _stepRegistry.Get(stepRef.Name);
+            if (step == null)
+            {
+                _logger.LogWarning("Unknown build step '{Name}', skipping", stepRef.Name);
+                continue;
+            }
+
+            var phase = stepRef.Phase ?? step.DefaultPhase;
+            if (!result.TryGetValue(phase, out var list))
+            {
+                list = [];
+                result[phase] = list;
+            }
+            list.Add((step, stepRef));
+        }
+
+        return result;
+    }
+
+    private async Task<bool> RunStepsAsync(
+        BuildPhase phase,
+        Dictionary<BuildPhase, List<(IBuildStep Step, StepReference Ref)>> stepsByPhase,
+        BuildConfiguration config,
+        BuildState state,
+        CancellationToken cancellationToken)
+    {
+        if (!stepsByPhase.TryGetValue(phase, out var steps) || steps.Count == 0)
+            return true;
+
+        _logger.LogInformation("[{Phase}]", phase);
+
+        foreach (var (step, stepRef) in steps)
+        {
+            _logger.LogInformation("  Running step: {Name}", step.Name);
+
+            var context = new StepContext
+            {
+                Configuration = config,
+                Toolchain = _toolchain,
+                Logger = _logger,
+                StepConfig = stepRef.Config ?? new(),
+                State = state,
+            };
+
+            var result = await step.ExecuteAsync(context, cancellationToken);
+            if (!result.Success)
+            {
+                _logger.LogError("Step '{Name}' failed: {Message}", step.Name, result.Message);
+                return false;
+            }
+
+            if (result.Message != null)
+                _logger.LogDebug("  {Message}", result.Message);
+        }
+
         return true;
     }
 
@@ -125,8 +221,6 @@ public class BuildRunner
         if (!File.Exists(objectPath))
             return true;
 
-        var sourceTime = File.GetLastWriteTimeUtc(sourcePath);
-        var objectTime = File.GetLastWriteTimeUtc(objectPath);
-        return sourceTime > objectTime;
+        return File.GetLastWriteTimeUtc(sourcePath) > File.GetLastWriteTimeUtc(objectPath);
     }
 }

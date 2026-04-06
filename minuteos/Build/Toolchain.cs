@@ -64,18 +64,20 @@ public class Toolchain
         else
             args.AddRange(["-O3", "-Os"]);
 
-        // Language-specific flags
+        // Language-specific flags (profile overrides, then component contributions)
         if (source.Language == SourceLanguage.C)
         {
             args.Add("-std=gnu11");
             if (profile.CFlags != null)
                 args.AddRange(profile.CFlags);
+            args.AddRange(config.ComponentCFlags);
         }
         else if (source.Language == SourceLanguage.Cpp)
         {
             args.AddRange(["-std=gnu++17", "-fno-rtti", "-fno-threadsafe-statics", "-fno-use-cxa-atexit"]);
             if (profile.CxxFlags != null)
                 args.AddRange(profile.CxxFlags);
+            args.AddRange(config.ComponentCxxFlags);
         }
 
         args.AddRange(["-o", outputPath]);
@@ -87,6 +89,7 @@ public class Toolchain
         IEnumerable<string> objectFiles,
         string outputPath,
         BuildConfiguration config,
+        IEnumerable<string>? extraLinkFlags = null,
         CancellationToken cancellationToken = default)
     {
         var profile = config.Profile;
@@ -106,9 +109,14 @@ public class Toolchain
         foreach (var dir in libDirs)
             args.AddRange(["-L", dir]);
 
-        // Extra link flags from profile
+        // Extra link flags from profile and components
         if (profile.LinkFlags != null)
             args.AddRange(profile.LinkFlags);
+        args.AddRange(config.ComponentLinkFlags);
+
+        // Extra link flags from build steps
+        if (extraLinkFlags != null)
+            args.AddRange(extraLinkFlags);
 
         // Garbage-collect unused sections
         args.Add("-Wl,--gc-sections");
@@ -120,6 +128,16 @@ public class Toolchain
     {
         return await RunAsync(Size, [elfPath], Path.GetDirectoryName(elfPath)!, cancellationToken);
     }
+
+    /// <summary>
+    /// Runs an arbitrary toolchain program. Used by build steps.
+    /// </summary>
+    public Task<CompilationResult> RunToolAsync(
+        string program,
+        IEnumerable<string> arguments,
+        string workingDirectory,
+        CancellationToken cancellationToken)
+        => RunAsync(program, arguments, workingDirectory, cancellationToken);
 
     private async Task<CompilationResult> RunAsync(
         string program,

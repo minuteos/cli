@@ -33,6 +33,9 @@ public class InitCommand : LoggingCommand
               config: Release
               components:
                 - kernel
+              steps:
+                - name: git-version
+                - name: size-report
 
             configurations:
               release: {}
@@ -52,6 +55,13 @@ public class InitCommand : LoggingCommand
               #     - -T
               #     - linker.ld
               #     - --specs=nosys.specs
+              #   steps:
+              #     - name: git-version
+              #     - name: size-report
+              #     - name: binary-output
+              #       config:
+              #         formats: bin,hex
+              #     - name: disassembly
             """;
 
         File.WriteAllText(configPath, yaml);

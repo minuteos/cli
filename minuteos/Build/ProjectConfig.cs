@@ -105,6 +105,11 @@ public class ConfigurationProfile
     public List<string>? CxxFlags { get; set; }
 
     /// <summary>
+    /// Build steps to run. Components also contribute steps via component.yaml.
+    /// </summary>
+    public List<StepReference>? Steps { get; set; }
+
+    /// <summary>
     /// Returns a new profile with values from 'other' taking precedence over this one.
     /// Lists are replaced, not merged - the override fully owns the list if specified.
     /// </summary>
@@ -120,5 +125,6 @@ public class ConfigurationProfile
         IncludeDirs = other.IncludeDirs ?? IncludeDirs,
         CFlags = other.CFlags ?? CFlags,
         CxxFlags = other.CxxFlags ?? CxxFlags,
+        Steps = other.Steps ?? Steps,
     };
 }

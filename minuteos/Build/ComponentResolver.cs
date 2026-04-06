@@ -3,12 +3,14 @@ using System.Text.RegularExpressions;
 namespace MinuteOS.Cli.Build;
 
 /// <summary>
-/// Resolves component dependencies by parsing Include.mk files.
-/// Uses recursive resolution - no artificial depth limits.
+/// Resolves component dependencies by reading component.yaml files,
+/// with fallback to Include.mk for backwards compatibility.
+/// Uses recursive DFS with cycle detection.
 /// </summary>
 public partial class ComponentResolver
 {
     private readonly ProjectLayout _layout;
+    private readonly Dictionary<string, ComponentMeta> _metaCache = new();
 
     public ComponentResolver(ProjectLayout layout)
     {
@@ -16,8 +18,14 @@ public partial class ComponentResolver
     }
 
     /// <summary>
+    /// All component metadata collected during resolution.
+    /// Available after ResolveComponents is called.
+    /// </summary>
+    public IReadOnlyDictionary<string, ComponentMeta> ComponentMetadata => _metaCache;
+
+    /// <summary>
     /// Resolves all components including transitive dependencies via recursive DFS.
-    /// Returns components in dependency order (dependencies before dependents).
+    /// Returns components in dependency order (dependencies first).
     /// </summary>
     public List<string> ResolveComponents(IEnumerable<string> initialComponents, IReadOnlyList<string> targetDirs)
     {
@@ -45,7 +53,11 @@ public partial class ComponentResolver
             throw new InvalidOperationException(
                 $"Circular dependency detected involving component '{component}'");
 
-        foreach (var dep in GetComponentDependencies(component, targetDirs))
+        // Load metadata and get dependencies
+        var meta = LoadComponentMeta(component, targetDirs);
+        var deps = meta?.Requires ?? GetIncludeMkDependencies(component, targetDirs);
+
+        foreach (var dep in deps)
             Resolve(dep, targetDirs, resolved, seen, visiting);
 
         visiting.Remove(component);
@@ -53,7 +65,54 @@ public partial class ComponentResolver
         resolved.Add(component);
     }
 
-    private List<string> GetComponentDependencies(string component, IReadOnlyList<string> targetDirs)
+    /// <summary>
+    /// Loads component.yaml from the first target directory that has one.
+    /// Merges metadata from all target directories where the component exists.
+    /// </summary>
+    private ComponentMeta? LoadComponentMeta(string component, IReadOnlyList<string> targetDirs)
+    {
+        ComponentMeta? merged = null;
+
+        foreach (var targetDir in targetDirs)
+        {
+            var componentDir = Path.Combine(targetDir, component);
+            var meta = ComponentMeta.TryLoad(componentDir, component);
+            if (meta == null)
+                continue;
+
+            if (merged == null)
+            {
+                merged = meta;
+            }
+            else
+            {
+                // Merge: later target dirs can add to the metadata
+                merged.Requires ??= meta.Requires;
+                if (meta.Defines != null)
+                    (merged.Defines ??= []).AddRange(meta.Defines);
+                if (meta.IncludeDirs != null)
+                    (merged.IncludeDirs ??= []).AddRange(meta.IncludeDirs);
+                if (meta.CFlags != null)
+                    (merged.CFlags ??= []).AddRange(meta.CFlags);
+                if (meta.CxxFlags != null)
+                    (merged.CxxFlags ??= []).AddRange(meta.CxxFlags);
+                if (meta.LinkFlags != null)
+                    (merged.LinkFlags ??= []).AddRange(meta.LinkFlags);
+                if (meta.Steps != null)
+                    (merged.Steps ??= []).AddRange(meta.Steps);
+            }
+        }
+
+        if (merged != null)
+            _metaCache[component] = merged;
+
+        return merged;
+    }
+
+    /// <summary>
+    /// Fallback: parse Include.mk for COMPONENTS += lines.
+    /// </summary>
+    private List<string> GetIncludeMkDependencies(string component, IReadOnlyList<string> targetDirs)
     {
         var deps = new List<string>();
 

@@ -2,7 +2,7 @@ namespace MinuteOS.Cli.Build;
 
 /// <summary>
 /// Represents the fully resolved build configuration for a minuteos project.
-/// Built from a ProjectConfig + named configuration profile.
+/// Built from a ProjectConfig + named configuration profile + component metadata.
 /// </summary>
 public class BuildConfiguration
 {
@@ -20,6 +20,31 @@ public class BuildConfiguration
     public required List<string> Defines { get; init; }
     public required ConfigurationProfile Profile { get; init; }
 
+    /// <summary>
+    /// Build step references collected from all components and the project config.
+    /// </summary>
+    public required List<StepReference> StepRefs { get; init; }
+
+    /// <summary>
+    /// Component metadata collected during resolution.
+    /// </summary>
+    public required IReadOnlyDictionary<string, ComponentMeta> ComponentMetadata { get; init; }
+
+    /// <summary>
+    /// Extra C flags contributed by components.
+    /// </summary>
+    public required List<string> ComponentCFlags { get; init; }
+
+    /// <summary>
+    /// Extra C++ flags contributed by components.
+    /// </summary>
+    public required List<string> ComponentCxxFlags { get; init; }
+
+    /// <summary>
+    /// Extra link flags contributed by components.
+    /// </summary>
+    public required List<string> ComponentLinkFlags { get; init; }
+
     public string OutputRoot => Path.Combine(Layout.ProjectRoot, "out", Name);
     public string ObjectDir => Path.Combine(OutputRoot, "obj");
     public string OutputName => Layout.Name;
@@ -31,9 +56,6 @@ public class BuildConfiguration
         return Path.Combine(ObjectDir, objRelative);
     }
 
-    /// <summary>
-    /// Creates a build configuration from a project config and a named configuration.
-    /// </summary>
     public static BuildConfiguration Create(ProjectConfig projectConfig, string configName, string projectRoot)
     {
         var profile = projectConfig.Resolve(configName);
@@ -42,19 +64,56 @@ public class BuildConfiguration
         var target = profile.Target ?? "host";
         var config = profile.Config ?? "Release";
 
-        // Target resolution: primary target + "all" pseudo-target
         var targets = new List<string> { target };
         var targetDirs = layout.ResolveTargetDirs(targets);
 
-        // Component resolution with proper recursion
+        // Component resolution - also collects component.yaml metadata
         var resolver = new ComponentResolver(layout);
         var requestedComponents = profile.Components ?? ["kernel"];
         var resolvedComponents = resolver.ResolveComponents(requestedComponents, targetDirs);
+        var componentMeta = resolver.ComponentMetadata;
 
         var componentDirs = layout.ResolveComponentDirs(targetDirs, resolvedComponents);
 
-        // Include dirs: extra from profile, project source, target dirs, target roots
+        // Merge contributions from all component metadata
+        var componentDefines = new List<string>();
+        var componentIncludeDirs = new List<string>();
+        var componentCFlags = new List<string>();
+        var componentCxxFlags = new List<string>();
+        var componentLinkFlags = new List<string>();
+        var stepRefs = new List<StepReference>();
+
+        foreach (var component in resolvedComponents)
+        {
+            if (!componentMeta.TryGetValue(component, out var meta))
+                continue;
+
+            if (meta.Defines != null)
+                componentDefines.AddRange(meta.Defines);
+
+            if (meta.IncludeDirs != null)
+            {
+                foreach (var dir in meta.IncludeDirs)
+                    componentIncludeDirs.Add(Path.GetFullPath(Path.Combine(meta.ComponentDir, dir)));
+            }
+
+            if (meta.CFlags != null)
+                componentCFlags.AddRange(meta.CFlags);
+            if (meta.CxxFlags != null)
+                componentCxxFlags.AddRange(meta.CxxFlags);
+            if (meta.LinkFlags != null)
+                componentLinkFlags.AddRange(meta.LinkFlags);
+            if (meta.Steps != null)
+                stepRefs.AddRange(meta.Steps);
+        }
+
+        // Also collect steps from the project-level config
+        if (profile.Steps != null)
+            stepRefs.AddRange(profile.Steps);
+
+        // Include dirs: component contributions, profile overrides, project source, target dirs, target roots
         var includeDirs = new List<string>();
+        includeDirs.AddRange(componentIncludeDirs);
         if (profile.IncludeDirs != null)
         {
             foreach (var dir in profile.IncludeDirs)
@@ -65,7 +124,7 @@ public class BuildConfiguration
         includeDirs.AddRange(targetDirs);
         includeDirs.AddRange(layout.TargetRoots);
 
-        // Source dirs: project source, target dirs, component dirs
+        // Source dirs
         var sourceDirs = new List<string>();
         if (Directory.Exists(layout.SourceDir))
             sourceDirs.Add(layout.SourceDir);
@@ -76,7 +135,7 @@ public class BuildConfiguration
         var collector = new SourceCollector();
         var sources = collector.CollectSources(sourceDirs, projectRoot);
 
-        // Defines: C<component>, T<target>, config-specific, plus extras from profile
+        // Defines: C<component>, T<target>, config-specific, component contributions, profile extras
         var defines = new List<string>();
         foreach (var c in resolvedComponents)
             defines.Add("C" + c.Replace("/", "_").Replace("-", "_"));
@@ -86,6 +145,7 @@ public class BuildConfiguration
             defines.Add("DEBUG");
         if (config == "Trace")
             defines.Add("TRACE");
+        defines.AddRange(componentDefines);
         if (profile.Defines != null)
             defines.AddRange(profile.Defines);
 
@@ -104,6 +164,11 @@ public class BuildConfiguration
             Sources = sources,
             Defines = defines,
             Profile = profile,
+            StepRefs = stepRefs,
+            ComponentMetadata = componentMeta,
+            ComponentCFlags = componentCFlags,
+            ComponentCxxFlags = componentCxxFlags,
+            ComponentLinkFlags = componentLinkFlags,
         };
     }
 }
