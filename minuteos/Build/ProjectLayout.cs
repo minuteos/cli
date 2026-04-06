@@ -16,10 +16,10 @@ public class ProjectLayout
     public IReadOnlyList<string> LibRoots { get; }
     public IReadOnlyList<string> TargetRoots { get; }
 
-    public ProjectLayout(string projectRoot)
+    public ProjectLayout(string projectRoot, string? name = null)
     {
         ProjectRoot = Path.GetFullPath(projectRoot);
-        Name = Path.GetFileName(ProjectRoot);
+        Name = name ?? Path.GetFileName(ProjectRoot);
         SourceDir = Path.Combine(ProjectRoot, "src");
 
         // Find lib* directories (LIB_ROOTS)

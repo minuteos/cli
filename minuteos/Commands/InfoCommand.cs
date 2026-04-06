@@ -1,99 +1,69 @@
-using System.ComponentModel;
 using MinuteOS.Cli.Build;
 using triaxis.CommandLine;
 
 namespace MinuteOS.Cli.Commands;
 
-[Command("info", Description = "Show project build configuration details")]
+[Command("info", Description = "Show resolved project configuration")]
 public class InfoCommand : LoggingCommand
 {
-    [Option("--target", "-t", Description = "Target platform (default: host)")]
-    [DefaultValue("host")]
-    public string Target { get; set; } = "host";
+    [Option("--configuration", "-c", Description = "Configuration name (omit to show all)")]
+    public string Configuration { get; set; } = "";
 
-    [Option("--config", "-c", Description = "Build configuration (default: Release)")]
-    [DefaultValue("Release")]
-    public string Config { get; set; } = "Release";
-
-    [Option("--components", Description = "Components (comma-separated, default: kernel)")]
-    public string? Components { get; set; }
-
-    [Option("--project", "-p", Description = "Project root directory (default: current directory)")]
+    [Option("--project", "-p", Description = "Project root directory")]
     public string? ProjectDir { get; set; }
 
     public Task<int> ExecuteAsync(CancellationToken cancellationToken)
     {
-        var projectRoot = ProjectDir ?? Directory.GetCurrentDirectory();
-        projectRoot = Path.GetFullPath(projectRoot);
+        var projectRoot = ProjectConfig.GetProjectRoot(ProjectDir);
 
-        var components = Components?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            ?? ["kernel"];
-
-        BuildConfiguration config;
+        ProjectConfig projectConfig;
         try
         {
-            config = BuildConfiguration.Create(
-                projectRoot,
-                target: Target,
-                config: Config,
-                components: components);
+            projectConfig = ProjectConfig.Load(projectRoot);
         }
         catch (Exception ex)
         {
-            Logger.LogError("Failed to configure: {Message}", ex.Message);
+            Logger.LogError("{Message}", ex.Message);
             return Task.FromResult(1);
         }
 
-        Console.WriteLine($"Project:        {config.OutputName}");
-        Console.WriteLine($"Root:           {config.Layout.ProjectRoot}");
-        Console.WriteLine($"Target:         {config.Target}");
-        Console.WriteLine($"Configuration:  {config.Config}");
-        Console.WriteLine($"Output:         {config.PrimaryOutput}");
-        Console.WriteLine();
+        var configNames = Configuration != ""
+            ? [Configuration]
+            : projectConfig.ConfigurationNames.ToList();
 
-        Console.WriteLine("Lib roots:");
-        foreach (var root in config.Layout.LibRoots)
-            Console.WriteLine($"  {Path.GetRelativePath(projectRoot, root)}");
-        Console.WriteLine();
+        foreach (var configName in configNames)
+        {
+            BuildConfiguration config;
+            try
+            {
+                config = BuildConfiguration.Create(projectConfig, configName, projectRoot);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError("Failed to resolve '{Name}': {Message}", configName, ex.Message);
+                continue;
+            }
 
-        Console.WriteLine("Target roots:");
-        foreach (var root in config.Layout.TargetRoots)
-            Console.WriteLine($"  {Path.GetRelativePath(projectRoot, root)}");
-        Console.WriteLine();
+            Console.WriteLine($"=== {configName} ===");
+            Console.WriteLine($"  Target:       {config.Target}");
+            Console.WriteLine($"  Config:       {config.Config}");
+            Console.WriteLine($"  Output:       {config.PrimaryOutput}");
+            Console.WriteLine($"  Toolchain:    {config.Profile.ToolchainPrefix ?? "(default)"}");
+            Console.WriteLine($"  Components:   {string.Join(", ", config.Components)}");
+            Console.WriteLine($"  Sources:      {config.Sources.Count} files");
+            Console.WriteLine($"  Defines:      {string.Join(", ", config.Defines)}");
 
-        Console.WriteLine("Target directories:");
-        foreach (var dir in config.TargetDirs)
-            Console.WriteLine($"  {Path.GetRelativePath(projectRoot, dir)}");
-        Console.WriteLine();
+            if (config.Profile.ArchFlags is { Count: > 0 } archFlags)
+                Console.WriteLine($"  Arch flags:   {string.Join(" ", archFlags)}");
 
-        Console.WriteLine($"Components ({config.Components.Count}):");
-        foreach (var c in config.Components)
-            Console.WriteLine($"  {c}");
-        Console.WriteLine();
+            Console.WriteLine();
+        }
 
-        Console.WriteLine("Component directories:");
-        foreach (var dir in config.ComponentDirs)
-            Console.WriteLine($"  {Path.GetRelativePath(projectRoot, dir)}");
-        Console.WriteLine();
+        Console.WriteLine($"Project:    {projectConfig.Name}");
+        Console.WriteLine($"Root:       {projectRoot}");
 
-        Console.WriteLine("Include directories:");
-        foreach (var dir in config.IncludeDirs)
-            Console.WriteLine($"  {Path.GetRelativePath(projectRoot, dir)}");
-        Console.WriteLine();
-
-        Console.WriteLine("Source directories:");
-        foreach (var dir in config.SourceDirs)
-            Console.WriteLine($"  {Path.GetRelativePath(projectRoot, dir)}");
-        Console.WriteLine();
-
-        Console.WriteLine($"Source files ({config.Sources.Count}):");
-        foreach (var source in config.Sources)
-            Console.WriteLine($"  [{source.Language}] {source.RelativePath}");
-        Console.WriteLine();
-
-        Console.WriteLine("Defines:");
-        foreach (var d in config.Defines)
-            Console.WriteLine($"  {d}");
+        var layout = new ProjectLayout(projectRoot, projectConfig.Name);
+        Console.WriteLine($"Lib roots:  {string.Join(", ", layout.LibRoots.Select(r => Path.GetRelativePath(projectRoot, r)))}");
 
         return Task.FromResult(0);
     }

@@ -4,8 +4,7 @@ namespace MinuteOS.Cli.Build;
 
 /// <summary>
 /// Resolves component dependencies by parsing Include.mk files.
-/// Each component's Include.mk can add more components via "COMPONENTS += ..."
-/// Dependencies are resolved iteratively until stable (max 8 levels, matching Base.mk).
+/// Uses recursive resolution - no artificial depth limits.
 /// </summary>
 public partial class ComponentResolver
 {
@@ -17,40 +16,41 @@ public partial class ComponentResolver
     }
 
     /// <summary>
-    /// Resolves all components including transitive dependencies.
-    /// Returns the full ordered list of unique components.
+    /// Resolves all components including transitive dependencies via recursive DFS.
+    /// Returns components in dependency order (dependencies before dependents).
     /// </summary>
     public List<string> ResolveComponents(IEnumerable<string> initialComponents, IReadOnlyList<string> targetDirs)
     {
-        var components = new List<string>(initialComponents);
-        var seen = new HashSet<string>(components);
+        var resolved = new List<string>();
+        var seen = new HashSet<string>();
+        var visiting = new HashSet<string>();
 
-        const int maxIterations = 8;
-        for (int i = 0; i < maxIterations; i++)
-        {
-            var newComponents = new List<string>();
+        foreach (var component in initialComponents)
+            Resolve(component, targetDirs, resolved, seen, visiting);
 
-            foreach (var component in components)
-            {
-                var deps = GetComponentDependencies(component, targetDirs);
-                foreach (var dep in deps)
-                {
-                    if (seen.Add(dep))
-                        newComponents.Add(dep);
-                }
-            }
+        return resolved;
+    }
 
-            if (newComponents.Count == 0)
-                break;
+    private void Resolve(
+        string component,
+        IReadOnlyList<string> targetDirs,
+        List<string> resolved,
+        HashSet<string> seen,
+        HashSet<string> visiting)
+    {
+        if (seen.Contains(component))
+            return;
 
-            components.AddRange(newComponents);
+        if (!visiting.Add(component))
+            throw new InvalidOperationException(
+                $"Circular dependency detected involving component '{component}'");
 
-            if (i == maxIterations - 1 && newComponents.Count > 0)
-                throw new InvalidOperationException(
-                    "Too many dependency levels. Consider simplifying the dependency tree.");
-        }
+        foreach (var dep in GetComponentDependencies(component, targetDirs))
+            Resolve(dep, targetDirs, resolved, seen, visiting);
 
-        return components;
+        visiting.Remove(component);
+        seen.Add(component);
+        resolved.Add(component);
     }
 
     private List<string> GetComponentDependencies(string component, IReadOnlyList<string> targetDirs)
