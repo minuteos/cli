@@ -7,7 +7,7 @@ extern uint32_t __bss_start;
 extern uint32_t __bss_end;
 extern uint32_t __stack_top;
 
-extern int main(void);
+extern int main(int argc, char** argv);
 void _exit(int code);
 
 static void Default_Handler(void) { while (1) { } }
@@ -59,8 +59,12 @@ void _start_c(void)
     for (uint32_t *b = &__bss_start; b < &__bss_end; b++) *b = 0;
 
     /* No .init_array needed: TEST_CASE descriptors are placed in the
-       test_cases section at link time and walked directly by main. */
-    _exit(main());
+       test_cases section at link time and walked directly by main.
+       Pass argc=0/argv=NULL explicitly - calling main() with garbage
+       registers feeds a stray cmp that, combined with the preceding IT
+       blocks, mis-executes under qemu's TCG at -O3. */
+    static char* argv0 = 0;
+    _exit(main(0, &argv0));
 }
 
 /* Set the stack pointer explicitly, then enter the C runtime. */

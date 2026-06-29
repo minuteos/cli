@@ -233,9 +233,11 @@ configurations:
       timeout: 60
 
   renode:
-    target: cortex-m4
+    target: cortex-m3
     test-runner:
-      command: renode-test
+      # Renode drives a machine from a script; a small wrapper adapts it to the
+      # {binary} -> stdout contract. See examples/cortex-m3-qemu/renode.
+      command: examples/cortex-m3-qemu/renode/run.sh
       args: ["{binary}"]
 ```
 
