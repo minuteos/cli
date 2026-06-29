@@ -45,12 +45,22 @@ public partial class ProjectLayout
     /// Also collects TargetMeta for each resolved target.
     /// </summary>
     public List<string> ResolveTargetChain(string primaryTarget, out Dictionary<string, TargetMeta> targetMetadata)
+        => ResolveTargetChain(primaryTarget, [], out targetMetadata);
+
+    /// <summary>
+    /// Resolves the full target chain including parent targets and any extra
+    /// targets (e.g. the "test" pseudo-target injected for test builds).
+    /// </summary>
+    public List<string> ResolveTargetChain(string primaryTarget, IEnumerable<string> extraTargets, out Dictionary<string, TargetMeta> targetMetadata)
     {
         var resolved = new List<string>();
         var seen = new HashSet<string>();
         var metadata = new Dictionary<string, TargetMeta>();
 
         ResolveTarget(primaryTarget, resolved, seen, metadata);
+
+        foreach (var extra in extraTargets)
+            ResolveTarget(extra, resolved, seen, metadata);
 
         // "all" is always included last
         if (seen.Add("all"))

@@ -20,19 +20,26 @@ public class BuildRunner
         _logger = logger;
     }
 
-    public async Task<bool> BuildAsync(BuildConfiguration config, int parallelism, CancellationToken cancellationToken)
+    public async Task<bool> BuildAsync(BuildConfiguration config, int parallelism, CancellationToken cancellationToken, bool quiet = false)
     {
-        _logger.LogInformation("Project:      {Name}", config.OutputName);
-        _logger.LogInformation("Target:       {Target}", config.Target);
-        _logger.LogInformation("Config:       {Config}", config.Config);
-        _logger.LogInformation("Components:   {Components}", string.Join(", ", config.Components));
-        _logger.LogInformation("Sources:      {Count} files", config.Sources.Count);
-        _logger.LogInformation("Output:       {Output}", config.PrimaryOutput);
+        // In quiet mode (per-suite test builds) only warnings/errors are logged.
+        void Info(string message, params object[] args)
+        {
+            if (!quiet)
+                _logger.LogInformation(message, args);
+        }
+
+        Info("Project:      {Name}", config.OutputName);
+        Info("Target:       {Target}", config.Target);
+        Info("Config:       {Config}", config.Config);
+        Info("Components:   {Components}", string.Join(", ", config.Components));
+        Info("Sources:      {Count} files", config.Sources.Count);
+        Info("Output:       {Output}", config.PrimaryOutput);
 
         if (config.StepRefs.Count > 0)
-            _logger.LogInformation("Steps:        {Steps}", string.Join(", ", config.StepRefs.Select(s => s.Name)));
+            Info("Steps:        {Steps}", string.Join(", ", config.StepRefs.Select(s => s.Name)));
 
-        _logger.LogInformation("");
+        Info("");
 
         // Resolve steps by phase
         var stepsByPhase = ResolveSteps(config);
@@ -41,7 +48,7 @@ public class BuildRunner
         var state = new BuildState();
 
         // === PreBuild phase ===
-        if (!await RunStepsAsync(BuildPhase.PreBuild, stepsByPhase, config, state, cancellationToken))
+        if (!await RunStepsAsync(BuildPhase.PreBuild, stepsByPhase, config, state, cancellationToken, quiet))
             return false;
 
         // Merge step contributions into sources and defines
@@ -58,7 +65,7 @@ public class BuildRunner
         }
 
         // === Compile phase ===
-        _logger.LogInformation("Compiling {Count} files...", allSources.Count);
+        Info("Compiling {Count} files...", allSources.Count);
 
         var objectFiles = new List<string>();
         var compileTasks = new List<(SourceFile Source, string ObjectPath)>();
@@ -89,7 +96,7 @@ public class BuildRunner
                     return;
                 }
 
-                _logger.LogInformation("  {Compiler} -c {Source}",
+                Info("  {Compiler} -c {Source}",
                     item.Source.Language == SourceLanguage.C ? "gcc" : "g++",
                     item.Source.RelativePath);
 
@@ -120,12 +127,12 @@ public class BuildRunner
         }
 
         // === PreLink phase ===
-        if (!await RunStepsAsync(BuildPhase.PreLink, stepsByPhase, config, state, cancellationToken))
+        if (!await RunStepsAsync(BuildPhase.PreLink, stepsByPhase, config, state, cancellationToken, quiet))
             return false;
 
         // === Link phase ===
-        _logger.LogInformation("");
-        _logger.LogInformation("Linking...");
+        Info("");
+        Info("Linking...");
 
         Directory.CreateDirectory(Path.GetDirectoryName(config.PrimaryOutput)!);
 
@@ -144,11 +151,11 @@ public class BuildRunner
         }
 
         // === PostBuild phase ===
-        if (!await RunStepsAsync(BuildPhase.PostBuild, stepsByPhase, config, state, cancellationToken))
+        if (!await RunStepsAsync(BuildPhase.PostBuild, stepsByPhase, config, state, cancellationToken, quiet))
             return false;
 
-        _logger.LogInformation("");
-        _logger.LogInformation("Build succeeded: {Output}", config.PrimaryOutput);
+        Info("");
+        Info("Build succeeded: {Output}", config.PrimaryOutput);
         return true;
     }
 
@@ -182,16 +189,19 @@ public class BuildRunner
         Dictionary<BuildPhase, List<(IBuildStep Step, StepReference Ref)>> stepsByPhase,
         BuildConfiguration config,
         BuildState state,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool quiet = false)
     {
         if (!stepsByPhase.TryGetValue(phase, out var steps) || steps.Count == 0)
             return true;
 
-        _logger.LogInformation("[{Phase}]", phase);
+        if (!quiet)
+            _logger.LogInformation("[{Phase}]", phase);
 
         foreach (var (step, stepRef) in steps)
         {
-            _logger.LogInformation("  Running step: {Name}", step.Name);
+            if (!quiet)
+                _logger.LogInformation("  Running step: {Name}", step.Name);
 
             var context = new StepContext
             {

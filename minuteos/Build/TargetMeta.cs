@@ -78,6 +78,12 @@ public class TargetMeta
     public List<StepReference>? Steps { get; set; }
 
     /// <summary>
+    /// How to execute compiled test binaries on this target (e.g. an emulator).
+    /// </summary>
+    [YamlMember(Alias = "test-runner")]
+    public TestRunnerConfig? TestRunner { get; set; }
+
+    /// <summary>
     /// The directory this metadata was loaded from.
     /// </summary>
     [YamlIgnore]

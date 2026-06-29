@@ -22,6 +22,7 @@ minuteos build
 |---------|-------------|
 | `minuteos new <name>` | Scaffold a new project with lib, src, and config |
 | `minuteos build [-c name]` | Build one or all configurations |
+| `minuteos test [-c name]` | Build and run test suites |
 | `minuteos clean [-c name]` | Remove build artifacts |
 | `minuteos info [-c name]` | Show resolved build configuration |
 | `minuteos init` | Create a `minuteos.yaml` in an existing project |
@@ -185,6 +186,77 @@ Steps run at specific phases of the build pipeline:
 | `size-report` | PostBuild | Print binary size via `size` tool |
 | `disassembly` | PostBuild | Generate `.S` and `.SS` disassembly files |
 | `binary-output` | PostBuild | Convert ELF to bin/hex/srec via `objcopy` |
+
+## Testing
+
+Test suites live under a component's `tests/` directory:
+
+```
+lib/targets/all/base/tests/sanity/sanity.cpp
+lib/targets/all/kernel/tests/scheduler/scheduler.cpp
+```
+
+`minuteos test` discovers every `tests/<suite>/` directory, builds each suite
+as a standalone binary (linking the `testrunner` component + the component under
+test + the suite's own dependencies), runs it, and aggregates the results:
+
+```
+$ minuteos test
+=== Testing configuration: release ===
+Discovered 2 test suite(s).
+
+  PASS  base/sanity       (2/2, 2ms)
+  FAIL  kernel/scheduler  (1 failed)
+          overflow: (count) == (8) at .../scheduler.cpp:24
+
+Total: 5  Passed: 4  Failed: 1
+```
+
+Options: `-c <config>`, `-s <substring>` (filter suites), `-f <substring>`
+(filter test cases), `-j <n>` (parallel jobs).
+
+### Test runners (host, qemu, renode)
+
+Each configuration (or target) declares how to execute its test binaries. With no
+`test-runner`, the binary runs directly — that's the host case. For emulated
+targets, provide a runner command; `{binary}` and `{filter}` are substituted:
+
+```yaml
+configurations:
+  # host: no test-runner needed, binaries run directly
+
+  qemu:
+    target: cortex-m3
+    test-runner:
+      command: qemu-system-arm
+      args: [-machine, lm3s6965evb, -nographic, -semihosting, -kernel, "{binary}"]
+      timeout: 60
+
+  renode:
+    target: cortex-m4
+    test-runner:
+      command: renode-test
+      args: ["{binary}"]
+```
+
+A target can also supply the runner (e.g. `targets/qemu-arm/target.yaml`), so any
+configuration using that target inherits it. The profile's runner takes precedence
+over the target's.
+
+### Test output format
+
+The `testrunner` component prints machine-readable lines that `minuteos test`
+parses:
+
+```
+##TEST## <name> PASS
+##TEST## <name> FAIL <detail>
+##SUMMARY## total=<n> passed=<n> failed=<n>
+```
+
+The scaffold (`minuteos new`) includes a minimal host testrunner and a sample
+suite so `minuteos test` works out of the box. A suite is considered failed if it
+times out, exits non-zero, or reports any failed case.
 
 ## Incremental Builds
 

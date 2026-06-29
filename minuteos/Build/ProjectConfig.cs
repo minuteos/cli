@@ -122,6 +122,13 @@ public class ConfigurationProfile
     public List<StepReference>? Steps { get; set; }
 
     /// <summary>
+    /// How to execute compiled test binaries for this configuration.
+    /// Targets can also provide one (e.g. an emulator); the profile takes precedence.
+    /// </summary>
+    [YamlMember(Alias = "test-runner")]
+    public TestRunnerConfig? TestRunner { get; set; }
+
+    /// <summary>
     /// Returns a new profile with values from 'other' taking precedence over this one.
     /// Lists are replaced, not merged - the override fully owns the list if specified.
     /// </summary>
@@ -140,5 +147,6 @@ public class ConfigurationProfile
         PrimaryExt = other.PrimaryExt ?? PrimaryExt,
         LdScript = other.LdScript ?? LdScript,
         Steps = other.Steps ?? Steps,
+        TestRunner = other.TestRunner ?? TestRunner,
     };
 }

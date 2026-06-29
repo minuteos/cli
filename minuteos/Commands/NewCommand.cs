@@ -26,7 +26,9 @@ public class NewCommand : LoggingCommand
         {
             "src",
             "lib/targets/all/base",
+            "lib/targets/all/base/tests/sanity",
             "lib/targets/all/kernel",
+            "lib/targets/all/testrunner",
             "lib/targets/host",
         };
 
@@ -49,6 +51,14 @@ public class NewCommand : LoggingCommand
 
               debug:
                 config: Debug
+
+              # Example emulator configuration (requires an ARM target + qemu):
+              # qemu:
+              #   target: cortex-m3
+              #   test-runner:
+              #     command: qemu-system-arm
+              #     args: [-machine, lm3s6965evb, -nographic, -semihosting, -kernel, "{binary}"]
+              #     timeout: 60
             """);
 
         // base component
@@ -169,6 +179,121 @@ public class NewCommand : LoggingCommand
         File.WriteAllText(Path.Combine(projectDir, "lib/targets/all/kernel/Include.mk"),
             "COMPONENTS += base\n");
 
+        // testrunner component - a minimal host test framework
+        File.WriteAllText(Path.Combine(projectDir, "lib/targets/all/testrunner/component.yaml"),
+            "# Minimal test framework. Provides main() and the TEST_CASE/CHECK macros.\n");
+
+        File.WriteAllText(Path.Combine(projectDir, "lib/targets/all/testrunner/testrunner.h"),
+            """
+            #pragma once
+
+            #include <cstdio>
+            #include <cstring>
+
+            namespace testrunner {
+
+            typedef void (*TestFn)();
+
+            struct TestCase {
+                const char* name;
+                TestFn fn;
+                TestCase* next;
+            };
+
+            // Registers a test case (called from static initializers).
+            TestCase* register_test(TestCase* tc);
+
+            // Records a failure for the currently running test.
+            void report_failure(const char* expr, const char* file, int line);
+
+            } // namespace testrunner
+
+            #define TEST_CASE(name) \
+                static void test_##name(); \
+                static ::testrunner::TestCase tc_##name{ #name, test_##name, nullptr }; \
+                static ::testrunner::TestCase* reg_##name = ::testrunner::register_test(&tc_##name); \
+                static void test_##name()
+
+            #define CHECK(expr) \
+                do { if (!(expr)) { ::testrunner::report_failure(#expr, __FILE__, __LINE__); return; } } while (0)
+
+            #define CHECK_EQ(a, b) CHECK((a) == (b))
+            """);
+
+        File.WriteAllText(Path.Combine(projectDir, "lib/targets/all/testrunner/main.cpp"),
+            """
+            #include "testrunner.h"
+
+            namespace testrunner {
+
+            // Function-local static avoids static-init-order issues across files.
+            static TestCase*& head() { static TestCase* h = nullptr; return h; }
+
+            static const char* g_current = "";
+            static bool g_failed = false;
+            static char g_detail[256];
+
+            TestCase* register_test(TestCase* tc) {
+                tc->next = head();
+                head() = tc;
+                return tc;
+            }
+
+            void report_failure(const char* expr, const char* file, int line) {
+                if (!g_failed) {
+                    g_failed = true;
+                    snprintf(g_detail, sizeof(g_detail), "%s at %s:%d", expr, file, line);
+                }
+            }
+
+            } // namespace testrunner
+
+            int main(int argc, char** argv) {
+                using namespace testrunner;
+                const char* filter = argc > 1 ? argv[1] : nullptr;
+                int total = 0, passed = 0, failed = 0;
+
+                for (TestCase* tc = head(); tc; tc = tc->next) {
+                    if (filter && strstr(tc->name, filter) == nullptr) continue;
+                    total++;
+                    g_current = tc->name;
+                    g_failed = false;
+                    tc->fn();
+                    if (g_failed) {
+                        failed++;
+                        printf("##TEST## %s FAIL %s\n", tc->name, g_detail);
+                    } else {
+                        passed++;
+                        printf("##TEST## %s PASS\n", tc->name);
+                    }
+                }
+
+                printf("##SUMMARY## total=%d passed=%d failed=%d\n", total, passed, failed);
+                return failed == 0 ? 0 : 1;
+            }
+            """);
+
+        // Sample test suite for the base component
+        File.WriteAllText(Path.Combine(projectDir, "lib/targets/all/base/tests/sanity/sanity.cpp"),
+            """
+            #include <testrunner/testrunner.h>
+            #include <base/base.h>
+
+            TEST_CASE(ticks_start_at_zero)
+            {
+                base_init();
+                CHECK(base_ticks() == 0);
+            }
+
+            TEST_CASE(ticks_increment)
+            {
+                base_init();
+                uint32_t a = base_ticks();
+                uint32_t b = base_ticks();
+                CHECK_EQ(b, a + 1);
+            }
+            """);
+
         // Project source
         File.WriteAllText(Path.Combine(projectDir, "src/main.cpp"),
             $$"""
@@ -197,10 +322,11 @@ public class NewCommand : LoggingCommand
         File.WriteAllText(Path.Combine(projectDir, ".gitignore"), "out/\n");
 
         Logger.LogInformation("");
-        Logger.LogInformation("Project created. To build:");
+        Logger.LogInformation("Project created. To build and test:");
         Logger.LogInformation("  cd {ProjectName}", Name);
         Logger.LogInformation("  minuteos build");
         Logger.LogInformation("  ./out/release/{ProjectName}.elf", Name);
+        Logger.LogInformation("  minuteos test");
 
         return Task.FromResult(0);
     }

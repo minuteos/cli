@@ -45,9 +45,33 @@ public class BuildConfiguration
     /// </summary>
     public required List<string> LinkDirs { get; init; }
 
-    public string OutputRoot => Path.Combine(Layout.ProjectRoot, "out", Name);
+    /// <summary>
+    /// How to run compiled test binaries for this configuration, if any.
+    /// </summary>
+    public TestRunnerConfig? TestRunner { get; init; }
+
+    /// <summary>
+    /// Overrides the output binary name (defaults to the project name).
+    /// Used for test-suite builds where the binary is named after the suite.
+    /// </summary>
+    public string? OutputNameOverride { get; init; }
+
+    /// <summary>
+    /// Subdirectory under out/&lt;config&gt;/ where this build's artifacts go.
+    /// Used to isolate per-suite test builds, e.g. "tests/base/sanity".
+    /// </summary>
+    public string? OutputSubdir { get; init; }
+
+    public string OutputRoot
+    {
+        get
+        {
+            var root = Path.Combine(Layout.ProjectRoot, "out", Name);
+            return string.IsNullOrEmpty(OutputSubdir) ? root : Path.Combine(root, OutputSubdir);
+        }
+    }
     public string ObjectDir => Path.Combine(OutputRoot, "obj");
-    public string OutputName => Layout.Name;
+    public string OutputName => OutputNameOverride ?? Layout.Name;
     public string PrimaryOutput => Path.Combine(OutputRoot, OutputName + PrimaryExt);
 
     public string GetObjectPath(SourceFile source)
@@ -56,7 +80,8 @@ public class BuildConfiguration
         return Path.Combine(ObjectDir, objRelative);
     }
 
-    public static BuildConfiguration Create(ProjectConfig projectConfig, string configName, string projectRoot)
+    public static BuildConfiguration Create(
+        ProjectConfig projectConfig, string configName, string projectRoot, BuildOverrides? overrides = null)
     {
         var profile = projectConfig.Resolve(configName);
         var layout = new ProjectLayout(projectRoot, projectConfig.Name);
@@ -64,8 +89,13 @@ public class BuildConfiguration
         var primaryTarget = profile.Target ?? "host";
         var config = profile.Config ?? "Release";
 
+        // For test-suite builds the suite directory replaces the project src/ dir.
+        var primarySourceDir = overrides?.PrimarySourceDir ?? layout.SourceDir;
+
         // === Target resolution with inheritance ===
-        var targetNames = layout.ResolveTargetChain(primaryTarget, out var targetMetadata);
+        // Test builds inject extra targets (e.g. "test") that provide hardware stubs.
+        var targetNames = layout.ResolveTargetChain(
+            primaryTarget, overrides?.ExtraTargets ?? [], out var targetMetadata);
         var targetDirs = layout.ResolveTargetDirs(targetNames);
 
         // Merge target metadata contributions (child targets override parents)
@@ -107,10 +137,12 @@ public class BuildConfiguration
         }
 
         // === Component resolution ===
+        // Test builds supply their own component set (testrunner + component-under-test).
+        var baseComponents = overrides?.Components ?? profile.Components ?? ["kernel"];
         var resolver = new ComponentResolver(layout);
         var requestedComponents = new List<string>();
         requestedComponents.AddRange(targetComponents);
-        requestedComponents.AddRange(profile.Components ?? ["kernel"]);
+        requestedComponents.AddRange(baseComponents);
         var resolvedComponents = resolver.ResolveComponents(requestedComponents, targetDirs);
         var componentMeta = resolver.ComponentMetadata;
 
@@ -165,15 +197,15 @@ public class BuildConfiguration
             foreach (var dir in profile.IncludeDirs)
                 includeDirs.Add(Path.GetFullPath(Path.Combine(projectRoot, dir)));
         }
-        if (Directory.Exists(layout.SourceDir))
-            includeDirs.Add(layout.SourceDir);
+        if (Directory.Exists(primarySourceDir))
+            includeDirs.Add(primarySourceDir);
         includeDirs.AddRange(targetDirs);
         includeDirs.AddRange(layout.TargetRoots);
 
         // === Assemble source dirs ===
         var sourceDirs = new List<string>();
-        if (Directory.Exists(layout.SourceDir))
-            sourceDirs.Add(layout.SourceDir);
+        if (Directory.Exists(primarySourceDir))
+            sourceDirs.Add(primarySourceDir);
         sourceDirs.AddRange(targetDirs);
         sourceDirs.AddRange(componentDirs);
         sourceDirs.AddRange(componentSourceDirs);
@@ -211,6 +243,18 @@ public class BuildConfiguration
                 }
             }
             ldScriptPath ??= resolvedLdScript;
+        }
+
+        // Resolve test runner: profile takes precedence, else the most specific
+        // target (child-first) that declares one.
+        var resolvedTestRunner = profile.TestRunner;
+        if (resolvedTestRunner == null)
+        {
+            for (int i = targetNames.Count - 1; i >= 0 && resolvedTestRunner == null; i--)
+            {
+                if (targetMetadata.TryGetValue(targetNames[i], out var tmeta))
+                    resolvedTestRunner = tmeta.TestRunner;
+            }
         }
 
         return new BuildConfiguration
@@ -252,6 +296,9 @@ public class BuildConfiguration
             PrimaryExt = resolvedPrimaryExt,
             LdScript = ldScriptPath,
             LinkDirs = targetLinkDirs,
+            TestRunner = resolvedTestRunner,
+            OutputNameOverride = overrides?.OutputName,
+            OutputSubdir = overrides?.OutputSubdir,
         };
     }
 
@@ -308,4 +355,37 @@ public class BuildConfiguration
             .Where(Directory.Exists)
             .ToList();
     }
+}
+
+/// <summary>
+/// Overrides applied when building a single test suite rather than the main project.
+/// </summary>
+public record BuildOverrides
+{
+    /// <summary>
+    /// Replaces the project src/ directory as the primary source location
+    /// (the test suite directory).
+    /// </summary>
+    public string? PrimarySourceDir { get; init; }
+
+    /// <summary>
+    /// The full component set to build (testrunner + component-under-test +
+    /// the suite's own dependencies). Replaces the profile's component list.
+    /// </summary>
+    public IReadOnlyList<string>? Components { get; init; }
+
+    /// <summary>
+    /// Extra targets injected into the chain (e.g. "test" for hardware stubs).
+    /// </summary>
+    public IReadOnlyList<string> ExtraTargets { get; init; } = [];
+
+    /// <summary>
+    /// Overrides the output binary name (the suite name).
+    /// </summary>
+    public string? OutputName { get; init; }
+
+    /// <summary>
+    /// Subdirectory under out/&lt;config&gt;/ for this suite's artifacts.
+    /// </summary>
+    public string? OutputSubdir { get; init; }
 }
