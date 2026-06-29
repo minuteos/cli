@@ -197,21 +197,21 @@ public class NewCommand : LoggingCommand
             struct TestCase {
                 const char* name;
                 TestFn fn;
-                TestCase* next;
             };
-
-            // Registers a test case (called from static initializers).
-            TestCase* register_test(TestCase* tc);
 
             // Records a failure for the currently running test.
             void report_failure(const char* expr, const char* file, int line);
 
             } // namespace testrunner
 
+            // Test cases are emitted as const descriptors into a dedicated linker
+            // section; main() walks that section directly. This avoids static
+            // constructors / .init_array, which are unreliable in a minimal
+            // bare-metal C++ runtime.
             #define TEST_CASE(name) \
                 static void test_##name(); \
-                static ::testrunner::TestCase tc_##name{ #name, test_##name, nullptr }; \
-                static ::testrunner::TestCase* reg_##name = ::testrunner::register_test(&tc_##name); \
+                __attribute__((section("test_cases"), used)) \
+                static const ::testrunner::TestCase tc_##name = { #name, test_##name }; \
                 static void test_##name()
 
             #define CHECK(expr) \
@@ -224,20 +224,17 @@ public class NewCommand : LoggingCommand
             """
             #include "testrunner.h"
 
+            // Linker-provided bounds of the "test_cases" section. Every TEST_CASE
+            // descriptor lands between them - no runtime registration needed.
+            extern "C" {
+            extern const testrunner::TestCase __start_test_cases[];
+            extern const testrunner::TestCase __stop_test_cases[];
+            }
+
             namespace testrunner {
 
-            // Function-local static avoids static-init-order issues across files.
-            static TestCase*& head() { static TestCase* h = nullptr; return h; }
-
-            static const char* g_current = "";
             static bool g_failed = false;
             static char g_detail[256];
-
-            TestCase* register_test(TestCase* tc) {
-                tc->next = head();
-                head() = tc;
-                return tc;
-            }
 
             void report_failure(const char* expr, const char* file, int line) {
                 if (!g_failed) {
@@ -253,10 +250,9 @@ public class NewCommand : LoggingCommand
                 const char* filter = argc > 1 ? argv[1] : nullptr;
                 int total = 0, passed = 0, failed = 0;
 
-                for (TestCase* tc = head(); tc; tc = tc->next) {
+                for (const TestCase* tc = __start_test_cases; tc < __stop_test_cases; tc++) {
                     if (filter && strstr(tc->name, filter) == nullptr) continue;
                     total++;
-                    g_current = tc->name;
                     g_failed = false;
                     tc->fn();
                     if (g_failed) {

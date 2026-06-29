@@ -1,0 +1,19 @@
+toolchain-prefix: arm-none-eabi-
+primary-ext: .elf
+arch-flags:
+  - -mcpu=cortex-m3
+  - -mthumb
+ld-script: lm3s.ld
+link-flags:
+  - --specs=nano.specs
+  - -nostartfiles
+test-runner:
+  command: qemu-system-arm
+  args:
+    - -machine
+    - lm3s6965evb
+    - -nographic
+    - -semihosting
+    - -kernel
+    - "{binary}"
+  timeout: 30

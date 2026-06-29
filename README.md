@@ -243,6 +243,12 @@ A target can also supply the runner (e.g. `targets/qemu-arm/target.yaml`), so an
 configuration using that target inherits it. The profile's runner takes precedence
 over the target's.
 
+A complete, runnable Cortex-M3 + QEMU target (startup, linker script, semihosting,
+and the qemu `test-runner`) lives in [`examples/cortex-m3-qemu`](examples/cortex-m3-qemu).
+Dropping it into a project and running `minuteos test -c qemu` cross-compiles each
+suite with `arm-none-eabi-gcc`, runs it under `qemu-system-arm`, and reports results
+over semihosting.
+
 ### Test output format
 
 The `testrunner` component prints machine-readable lines that `minuteos test`
