@@ -173,7 +173,7 @@ public sealed class GccLinkStep : IGraphStep
         if (ld != null) args.AddRange(["-T", ld]);
 
         foreach (var dir in s.List("gcc.link-dirs"))
-            args.AddRange(["-L", dir]);
+            args.AddRange(["-L", ResolveLinkDir(dir, config)]);
 
         var libDirs = config.TargetDirs.Concat(config.ComponentDirs);
         if (Directory.Exists(config.Layout.SourceDir))
@@ -199,5 +199,23 @@ public sealed class GccLinkStep : IGraphStep
         {
             ConfigKey = string.Join(' ', args),
         };
+    }
+
+    /// <summary>
+    /// A relative link dir (e.g. from a migrated target's <c>gcc.link-dirs</c>) is
+    /// relative to the target/component dir it was declared in; resolve it against
+    /// those dirs. Absolute paths pass through.
+    /// </summary>
+    private static string ResolveLinkDir(string dir, BuildConfiguration config)
+    {
+        if (Path.IsPathRooted(dir))
+            return dir;
+        foreach (var searchDir in config.TargetDirs.Concat(config.ComponentDirs))
+        {
+            var candidate = Path.Combine(searchDir, dir);
+            if (Directory.Exists(candidate))
+                return candidate;
+        }
+        return dir;
     }
 }
