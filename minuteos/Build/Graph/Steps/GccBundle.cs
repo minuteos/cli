@@ -62,6 +62,7 @@ public sealed class GccCompileStep : IGraphStep
             Selector.Of(("kind", "source"), ("lang", "c")),
             Selector.Of(("kind", "source"), ("lang", "cpp")),
             Selector.Of(("kind", "source"), ("lang", "asm")),
+            Selector.Of(("kind", "header-dir")),
         ],
         [("kind", "object")]);
 
@@ -70,6 +71,10 @@ public sealed class GccCompileStep : IGraphStep
         var config = ctx.Config;
         var settings = ctx.Settings;
         var projectRoot = config.Layout.ProjectRoot;
+
+        // Generated header dirs (e.g. a transpiler's) join the -I path.
+        var extraIncludes = ctx.Inputs.Where(a => a.Kind == "header-dir").Select(a => a.Id).ToList();
+        var sources = ctx.Inputs.Where(a => a.Kind == "source").ToList();
 
         // PCH prerequisite (cpp compiles -include it).
         Artifact? pchArtifact = null;
@@ -81,7 +86,7 @@ public sealed class GccCompileStep : IGraphStep
             yield return new BuildAction("pch", pchInputs, pchOutputs, async actx =>
             {
                 var args = new List<string> { "-c", config.Pch };
-                GccFlags.AppendCompileFlags(args, settings, config, [], [], Path.GetDirectoryName(config.Pch)!, SourceLanguage.Cpp);
+                GccFlags.AppendCompileFlags(args, settings, config, [], extraIncludes, Path.GetDirectoryName(config.Pch)!, SourceLanguage.Cpp);
                 args.AddRange(["-o", config.PchGchFile]);
                 if (!actx.Quiet)
                     actx.Logger.LogInformation("  precompiling {Pch}", Path.GetFileName(config.Pch));
@@ -94,7 +99,7 @@ public sealed class GccCompileStep : IGraphStep
             };
         }
 
-        foreach (var source in ctx.Inputs)
+        foreach (var source in sources)
         {
             var lang = GccScanStep.Language(source.Properties.GetValueOrDefault("lang", "cpp"));
             var sourcePath = source.Id;
@@ -110,7 +115,7 @@ public sealed class GccCompileStep : IGraphStep
             {
                 var compiler = lang == SourceLanguage.C ? actx.Toolchain.CC : actx.Toolchain.CXX;
                 var args = new List<string> { "-c", sourcePath };
-                GccFlags.AppendCompileFlags(args, settings, config, [], [], Path.GetDirectoryName(sourcePath)!, lang);
+                GccFlags.AppendCompileFlags(args, settings, config, [], extraIncludes, Path.GetDirectoryName(sourcePath)!, lang);
                 if (lang == SourceLanguage.Cpp && config.Pch != null &&
                     !sourcePath.EndsWith(".nopch.cpp", StringComparison.Ordinal))
                 {

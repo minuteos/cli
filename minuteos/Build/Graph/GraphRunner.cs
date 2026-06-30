@@ -28,6 +28,7 @@ public static class GraphRunner
         var steps = new List<IGraphStep>
         {
             new GccScanStep(),
+            new CsScanStep(),
             new GccCompileStep(),
             new GccLinkStep(),
         };
@@ -67,6 +68,7 @@ public static class GraphRunner
             "gcc:objcopy" or "binary-output" => new GccObjcopyStep(cfg),
             "disassembly" => new DisassemblyStep(),
             "size" or "size-report" => new SizeStep(),
+            "transpile" => new TranspileStep(),
             _ => null,
         };
     }
