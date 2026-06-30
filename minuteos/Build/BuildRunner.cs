@@ -51,12 +51,21 @@ public class BuildRunner
         if (!await RunStepsAsync(BuildPhase.PreBuild, stepsByPhase, config, state, cancellationToken, quiet))
             return false;
 
-        // Merge step contributions into sources and defines
+        // Merge step contributions (generated sources, include dirs, defines)
+        // into the configuration before the PCH and compile see them. The
+        // collections on BuildConfiguration are mutable lists, so contributions
+        // from PreBuild steps (e.g. a transpiler's generated .cpp + header dir)
+        // flow through the normal compile path with no special casing.
         var allSources = new List<SourceFile>(config.Sources);
         allSources.AddRange(state.GeneratedSources);
 
-        var allDefines = new List<string>(config.Defines);
-        allDefines.AddRange(state.ExtraDefines);
+        foreach (var dir in state.ExtraIncludeDirs)
+            if (!config.IncludeDirs.Contains(dir))
+                config.IncludeDirs.Add(dir);
+
+        foreach (var define in state.ExtraDefines)
+            if (!config.Defines.Contains(define))
+                config.Defines.Add(define);
 
         if (allSources.Count == 0)
         {

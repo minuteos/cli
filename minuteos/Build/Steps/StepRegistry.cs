@@ -34,6 +34,7 @@ public class StepRegistry
         registry.Register(new SizeReportStep());
         registry.Register(new ShellStep());
         registry.Register(new SubBuildStep());
+        registry.Register(new TransformStep());
         return registry;
     }
 }
