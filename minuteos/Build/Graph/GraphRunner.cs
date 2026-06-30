@@ -69,6 +69,8 @@ public static class GraphRunner
             "disassembly" => new DisassemblyStep(),
             "size" or "size-report" => new SizeStep(),
             "transpile" => new TranspileStep(),
+            "transform" => new TransformStep(cfg),
+            "sub-build" => new SubBuildStep(cfg),
             _ => null,
         };
     }
