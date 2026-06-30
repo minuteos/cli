@@ -1,7 +1,7 @@
 # A toolchain-agnostic task-graph core
 
-Status: **stage 1 implemented** (supersedes the fixed-slot model in
-`generalized-spec.md`).
+Status: **implemented and default** (supersedes the fixed-slot model in
+`generalized-spec.md`; the legacy `BuildRunner` has been retired).
 
 > **Implementation progress.** Built under `minuteos/Build/Graph/`, reachable via
 > `minuteos build --graph`. Done and validated (byte-identical toolchain command
@@ -15,13 +15,17 @@ Status: **stage 1 implemented** (supersedes the fixed-slot model in
 >   config-change detection);
 > - parallel wave scheduler.
 >
-> **Remaining (each a decision, not mechanical):**
-> 1. `git-version` as a **settings augmenter** — needs the settings-ambient
->    two-phase (run augmenters, merge into a working bag, then plan/run readers),
->    which is the one change to the engine's single-pass execution model.
-> 2. **The flip** — make `--graph` the default, route `run`/`test` through it, and
->    retire the legacy `BuildRunner`. A go/no-go that wants real-lib revalidation
->    (the `lib`/`lib-arm` repos aren't in this environment).
+> Also done: `git-version` as a **settings augmenter** (settings-ambient
+> two-phase), `shell`, the `Settings` bag made **immutable** (builder + `With`),
+> and **the flip** — the graph is the default engine for `build`/`run`/`test` and
+> the legacy `BuildRunner` + all `IBuildStep` steps are deleted.
+>
+> **Remaining:**
+> - **Real-lib revalidation** — re-run `migrate` + build/test against the actual
+>   `lib`/`lib-arm` (not in this environment); validated here on the anchor and
+>   the cortex-m3 example.
+> - Optional polish: sub-build incrementality (currently `AlwaysRun`), cross-step
+>   parallelism (today only intra-step), content-hash fingerprints.
 
 ## Why
 

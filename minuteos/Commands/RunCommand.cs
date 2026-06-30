@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using MinuteOS.Cli.Build;
-using MinuteOS.Cli.Build.Steps;
 using triaxis.CommandLine;
 
 namespace MinuteOS.Cli.Commands;
@@ -50,11 +49,10 @@ public class RunCommand : LoggingCommand
             return 1;
         }
 
-        // Build the primary output.
-        var toolchain = new Toolchain(config.Profile.ToolchainPrefix ?? "", Logger);
-        var runner = new BuildRunner(toolchain, StepRegistry.CreateDefault(), Logger);
+        // Build the primary output through the task-graph engine.
+        var toolchain = new Toolchain(config.Settings.Scalar("gcc.toolchain-prefix") ?? "", Logger);
         var parallelism = Jobs > 0 ? Jobs : Environment.ProcessorCount;
-        if (!await runner.BuildAsync(config, parallelism, cancellationToken))
+        if (!await Build.Graph.GraphRunner.BuildAsync(config, toolchain, Logger, cancellationToken, parallelism))
             return 1;
 
         // Launch it - directly for host, or via the configuration's run step (qemu/renode).

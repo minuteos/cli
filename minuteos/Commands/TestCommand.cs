@@ -93,15 +93,13 @@ public class TestCommand : LoggingCommand
             Logger.LogInformation("Discovered {Count} test suite(s).", suites.Count);
             Logger.LogInformation("");
 
-            var toolchain = new Toolchain(baseConfig.Profile.ToolchainPrefix ?? "", Logger);
-            var stepRegistry = StepRegistry.CreateDefault();
-            var runner = new BuildRunner(toolchain, stepRegistry, Logger);
+            var toolchain = new Toolchain(baseConfig.Settings.Scalar("gcc.toolchain-prefix") ?? "", Logger);
 
             foreach (var suite in suites)
             {
                 var result = await RunSuiteAsync(
                     projectConfig, configName, projectRoot, suite,
-                    runner, executor, parallelism, cancellationToken);
+                    toolchain, executor, parallelism, cancellationToken);
 
                 if (result == null)
                 {
@@ -150,7 +148,7 @@ public class TestCommand : LoggingCommand
     /// </summary>
     private async Task<TestRunResult?> RunSuiteAsync(
         ProjectConfig projectConfig, string configName, string projectRoot, TestSuite suite,
-        BuildRunner runner, TestExecutor executor, int parallelism, CancellationToken cancellationToken)
+        Toolchain toolchain, TestExecutor executor, int parallelism, CancellationToken cancellationToken)
     {
         // Components: testrunner + the component under test + the suite's own deps.
         var components = new List<string> { "testrunner", suite.Component };
@@ -178,7 +176,8 @@ public class TestCommand : LoggingCommand
             return null;
         }
 
-        var built = await runner.BuildAsync(testConfig, parallelism, cancellationToken, quiet: true);
+        var built = await Build.Graph.GraphRunner.BuildAsync(
+            testConfig, toolchain, Logger, cancellationToken, parallelism, quiet: true);
         if (!built)
         {
             Logger.LogError("  FAIL  {Suite}  (build failed)", suite.Id);

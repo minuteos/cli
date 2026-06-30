@@ -4,10 +4,9 @@ using MinuteOS.Cli.Build.Graph.Steps;
 namespace MinuteOS.Cli.Build.Graph;
 
 /// <summary>
-/// Drives a build through the task-graph <see cref="BuildEngine"/> using the native
-/// (gcc) step bundle. Experimental — stage 1 covers the scan→compile→link path;
-/// configured steps (objcopy, transpile, sub-build, …) port onto the same engine
-/// next. Selected via <c>minuteos build --graph</c>.
+/// Drives a build through the task-graph <see cref="BuildEngine"/>: assembles the
+/// native (gcc) bundle plus the project's configured steps and runs the graph.
+/// This is the build engine for <c>build</c>/<c>run</c>/<c>test</c>.
 /// </summary>
 public static class GraphRunner
 {
@@ -21,7 +20,6 @@ public static class GraphRunner
             logger.LogInformation("Target:       {Target}", config.Target);
             logger.LogInformation("Config:       {Config}", config.Config);
             logger.LogInformation("Output:       {Output}", config.PrimaryOutput);
-            logger.LogInformation("Engine:       task-graph (experimental)");
             logger.LogInformation("");
         }
 
@@ -72,6 +70,7 @@ public static class GraphRunner
             "transform" => new TransformStep(cfg),
             "sub-build" => new SubBuildStep(cfg),
             "git-version" => new GitVersionStep(cfg),
+            "shell" => new ShellStep(cfg),
             _ => null,
         };
     }

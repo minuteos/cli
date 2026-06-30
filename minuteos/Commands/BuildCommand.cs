@@ -1,5 +1,5 @@
 using MinuteOS.Cli.Build;
-using MinuteOS.Cli.Build.Steps;
+using MinuteOS.Cli.Build.Graph;
 using triaxis.CommandLine;
 
 namespace MinuteOS.Cli.Commands;
@@ -15,9 +15,6 @@ public class BuildCommand : LoggingCommand
 
     [Option("--project", "-p", Description = "Project root directory")]
     public string? ProjectDir { get; set; }
-
-    [Option("--graph", Description = "Build through the experimental task-graph engine")]
-    public bool Graph { get; set; }
 
     public async Task<int> ExecuteAsync(CancellationToken cancellationToken)
     {
@@ -63,21 +60,10 @@ public class BuildCommand : LoggingCommand
                 continue;
             }
 
-            var toolchain = new Toolchain(config.Profile.ToolchainPrefix ?? "", Logger);
+            var toolchain = new Toolchain(config.Settings.Scalar("gcc.toolchain-prefix") ?? "", Logger);
             var parallelism = Jobs > 0 ? Jobs : Environment.ProcessorCount;
 
-            bool built;
-            if (Graph)
-            {
-                built = await Build.Graph.GraphRunner.BuildAsync(config, toolchain, Logger, cancellationToken, parallelism);
-            }
-            else
-            {
-                var runner = new BuildRunner(toolchain, StepRegistry.CreateDefault(), Logger);
-                built = await runner.BuildAsync(config, parallelism, cancellationToken);
-            }
-
-            if (!built)
+            if (!await GraphRunner.BuildAsync(config, toolchain, Logger, cancellationToken, parallelism))
                 success = false;
 
             Logger.LogInformation("");

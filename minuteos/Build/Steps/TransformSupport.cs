@@ -1,15 +1,13 @@
 using System.Text.Json;
 using Microsoft.Extensions.FileSystemGlobbing;
 using Microsoft.Extensions.FileSystemGlobbing.Abstractions;
-using Microsoft.Extensions.Logging;
 
 namespace MinuteOS.Cli.Build.Steps;
 
 /// <summary>
-/// Shared machinery for source-generation steps (the external-tool
-/// <see cref="TransformStep"/> and the in-process <see cref="InProcessTransformStep"/>
-/// family): input discovery, manifest I/O, and registration of generated outputs
-/// back into the build (sources to compile + header dirs onto the include path).
+/// Shared machinery for source-generation steps: input discovery by glob across
+/// the source dirs, and reading the tool's output manifest. Consumed by the
+/// graph <c>transform</c> step.
 /// </summary>
 internal static class TransformSupport
 {
@@ -79,60 +77,4 @@ internal static class TransformSupport
         return result;
     }
 
-    /// <summary>Writes a manifest listing the produced files (a JSON array).</summary>
-    public static void WriteManifest(string manifestPath, IEnumerable<string> outputs)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(manifestPath)!);
-        File.WriteAllText(manifestPath, JsonSerializer.Serialize(outputs));
-    }
-
-    /// <summary>
-    /// Registers manifest outputs into the build: <c>.c/.cpp/.cc/.cxx/.S</c> become
-    /// sources to compile, header dirs (and the generated root) join the include
-    /// path. Returns Fail if a listed file is missing.
-    /// </summary>
-    public static StepResult Register(
-        StepContext context, IReadOnlyList<string> outputs, string generatedDir, string id)
-    {
-        var build = context.Configuration;
-        var generatedCount = 0;
-        var headerDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var output in outputs)
-        {
-            if (!File.Exists(output))
-                return StepResult.Fail($"transform '{id}' lists missing file: {output}");
-
-            var ext = Path.GetExtension(output);
-            var language = ext switch
-            {
-                ".c" => SourceLanguage.C,
-                ".cpp" or ".cc" or ".cxx" => SourceLanguage.Cpp,
-                ".S" or ".s" => SourceLanguage.Assembly,
-                _ => (SourceLanguage?)null,
-            };
-
-            if (language is { } lang)
-            {
-                var rel = Path.GetRelativePath(build.Layout.ProjectRoot, output);
-                // Register into the state slot the runner merges into the compile.
-                context.State.GeneratedSources.Add(new SourceFile(output, rel, lang));
-                generatedCount++;
-            }
-            else if (ext is ".h" or ".hpp" or ".hh" or ".hxx")
-            {
-                headerDirs.Add(Path.GetDirectoryName(output)!);
-            }
-        }
-
-        // Generated headers must be on the include path. Always expose the
-        // generated root; add any nested dirs that actually contain headers.
-        context.State.ExtraIncludeDirs.Add(generatedDir);
-        foreach (var dir in headerDirs)
-            if (!string.Equals(dir, generatedDir, StringComparison.OrdinalIgnoreCase))
-                context.State.ExtraIncludeDirs.Add(dir);
-
-        context.Logger.LogDebug("  transform[{Id}]: registered {Count} generated source(s)", id, generatedCount);
-        return StepResult.Ok();
-    }
 }
