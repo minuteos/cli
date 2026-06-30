@@ -153,4 +153,27 @@ public class ComponentResolverTests : IDisposable
         Assert.NotNull(meta.CFlags);
         Assert.Contains("-Wno-unused", meta.CFlags);
     }
+
+    [Fact]
+    public void ResolveComponents_IncludeMk_CapturesDefines()
+    {
+        // Mirrors the real lib's testrunner/Include.mk, which sets a define.
+        CreateComponent("targets/all", "base");
+        CreateComponent("targets/all", "testrunner", includeMkContent:
+            "DEFINES += KERNEL_PLATFORM_HEADER=testrunner/kernel_platform.h\nCOMPONENTS += base\n");
+
+        var layout = new ProjectLayout(_tempDir);
+        var resolver = new ComponentResolver(layout);
+        var targetDirs = layout.ResolveTargetDirs(["all"]);
+
+        var result = resolver.ResolveComponents(["testrunner"], targetDirs);
+
+        // COMPONENTS += base pulls base in (dependency-first order).
+        Assert.Equal(["base", "testrunner"], result);
+
+        // DEFINES += is captured into the component metadata.
+        var meta = resolver.ComponentMetadata["testrunner"];
+        Assert.NotNull(meta.Defines);
+        Assert.Contains("KERNEL_PLATFORM_HEADER=testrunner/kernel_platform.h", meta.Defines);
+    }
 }

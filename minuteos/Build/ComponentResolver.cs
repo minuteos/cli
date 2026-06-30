@@ -76,7 +76,8 @@ public partial class ComponentResolver
         foreach (var targetDir in targetDirs)
         {
             var componentDir = Path.Combine(targetDir, component);
-            var meta = ComponentMeta.TryLoad(componentDir, component);
+            var meta = ComponentMeta.TryLoad(componentDir, component)
+                ?? LoadFromIncludeMk(componentDir, component);
             if (meta == null)
                 continue;
 
@@ -110,6 +111,32 @@ public partial class ComponentResolver
     }
 
     /// <summary>
+    /// Builds component metadata from a legacy Include.mk when no component.yaml
+    /// exists. Captures dependencies (COMPONENTS +=) and preprocessor defines
+    /// (DEFINES +=), e.g. testrunner's KERNEL_PLATFORM_HEADER.
+    /// </summary>
+    private static ComponentMeta? LoadFromIncludeMk(string componentDir, string component)
+    {
+        var includeMk = Path.Combine(componentDir, "Include.mk");
+        if (!File.Exists(includeMk))
+            return null;
+
+        var content = File.ReadAllText(includeMk);
+        var meta = new ComponentMeta { ComponentDir = componentDir, Name = component };
+
+        foreach (var m in ComponentsRegex().Matches(content).AsEnumerable())
+            (meta.Requires ??= []).AddRange(SplitTokens(m.Groups[1].Value));
+
+        foreach (var m in DefinesRegex().Matches(content).AsEnumerable())
+            (meta.Defines ??= []).AddRange(SplitTokens(m.Groups[1].Value));
+
+        return meta;
+    }
+
+    private static IEnumerable<string> SplitTokens(string value) =>
+        value.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    /// <summary>
     /// Fallback: parse Include.mk for COMPONENTS += lines.
     /// </summary>
     private List<string> GetIncludeMkDependencies(string component, IReadOnlyList<string> targetDirs)
@@ -135,4 +162,7 @@ public partial class ComponentResolver
 
     [GeneratedRegex(@"COMPONENTS\s*\+=\s*(.+)$", RegexOptions.Multiline)]
     private static partial Regex ComponentsRegex();
+
+    [GeneratedRegex(@"DEFINES\s*\+=\s*(.+)$", RegexOptions.Multiline)]
+    private static partial Regex DefinesRegex();
 }

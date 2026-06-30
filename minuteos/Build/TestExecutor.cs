@@ -3,6 +3,8 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("minuteos.tests")]
+
 namespace MinuteOS.Cli.Build;
 
 /// <summary>
@@ -147,7 +149,18 @@ public class TestExecutor
         @"^##SUMMARY##\s+total=(\d+)\s+passed=(\d+)\s+failed=(\d+)",
         RegexOptions.Multiline | RegexOptions.Compiled);
 
-    private static List<TestCaseResult> ParseCases(string output)
+    // Real minuteos testrunner (Markdown): "**28** :white_check_mark: / **0** :x:"
+    private static readonly Regex MarkdownSummaryRegex = new(
+        @"\*\*(\d+)\*\*\s*:white_check_mark:\s*/\s*\*\*(\d+)\*\*\s*:x:",
+        RegexOptions.Compiled);
+
+    // Real minuteos testrunner per-test row:
+    // "| <file> | <name> | <duration> | :white_check_mark: |"  (or :x:)
+    private static readonly Regex MarkdownRowRegex = new(
+        @"^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*[\d.]+\s*\|\s*:(white_check_mark|x):",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
+    internal static List<TestCaseResult> ParseCases(string output)
     {
         var cases = new List<TestCaseResult>();
         foreach (Match m in CaseRegex.Matches(output))
@@ -157,14 +170,37 @@ public class TestExecutor
             var detail = m.Groups[3].Success ? m.Groups[3].Value.Trim() : null;
             cases.Add(new TestCaseResult(name, passed, string.IsNullOrEmpty(detail) ? null : detail));
         }
+
+        // Fall back to the real minuteos testrunner's Markdown table rows.
+        if (cases.Count == 0)
+        {
+            foreach (Match m in MarkdownRowRegex.Matches(output))
+            {
+                var location = m.Groups[1].Value.Trim();
+                var name = m.Groups[2].Value.Trim();
+                var passed = m.Groups[3].Value == "white_check_mark";
+                cases.Add(new TestCaseResult(name, passed, passed ? null : location));
+            }
+        }
+
         return cases;
     }
 
-    private static (int?, int?, int?) ParseSummary(string output)
+    internal static (int? Total, int? Passed, int? Failed) ParseSummary(string output)
     {
         var m = SummaryRegex.Match(output);
-        if (!m.Success)
-            return (null, null, null);
-        return (int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value), int.Parse(m.Groups[3].Value));
+        if (m.Success)
+            return (int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value), int.Parse(m.Groups[3].Value));
+
+        // Real minuteos testrunner Markdown summary.
+        var md = MarkdownSummaryRegex.Match(output);
+        if (md.Success)
+        {
+            int passed = int.Parse(md.Groups[1].Value);
+            int failed = int.Parse(md.Groups[2].Value);
+            return (passed + failed, passed, failed);
+        }
+
+        return (null, null, null);
     }
 }
