@@ -40,6 +40,13 @@ public enum BuildPhase
     /// After linking the primary output.
     /// </summary>
     PostBuild,
+
+    /// <summary>
+    /// Executes the linked image (host directly, or via an emulator). NOT part of
+    /// the build pipeline - resolved out-of-band by <c>minuteos run</c> / <c>test</c>.
+    /// A target overrides this step to launch qemu/renode instead of running directly.
+    /// </summary>
+    Run,
 }
 
 /// <summary>

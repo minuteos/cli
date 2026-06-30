@@ -36,6 +36,10 @@ public class StepRegistry
         registry.Register(new SubBuildStep());
         registry.Register(new TransformStep());
         registry.Register(new TranspileStep());
+        // Run-phase steps (resolved out-of-band by run/test, no-op during build).
+        registry.Register(new RunStep("run"));
+        registry.Register(new RunStep("qemu"));
+        registry.Register(new RunStep("renode"));
         return registry;
     }
 }

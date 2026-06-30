@@ -185,6 +185,7 @@ public class TestCommand : LoggingCommand
             return null;
         }
 
-        return await executor.RunAsync(testConfig.PrimaryOutput, testConfig.TestRunner, Filter, cancellationToken);
+        var spec = RunSpecResolver.Resolve(testConfig, testConfig.PrimaryOutput, Filter);
+        return await executor.RunAsync(testConfig.PrimaryOutput, spec, cancellationToken);
     }
 }

@@ -58,13 +58,10 @@ public class TestExecutor
 
     public async Task<TestRunResult> RunAsync(
         string binaryPath,
-        TestRunnerConfig? runner,
-        string? filter,
+        RunSpec spec,
         CancellationToken cancellationToken)
     {
-        runner ??= new TestRunnerConfig();
-        var (program, args) = runner.Resolve(binaryPath, filter);
-        var timeoutSeconds = runner.Timeout ?? 60;
+        var (program, args, timeoutSeconds) = (spec.Program, spec.Args, spec.TimeoutSeconds);
 
         _logger.LogDebug("Test run: {Program} {Args}", program, string.Join(' ', args));
 

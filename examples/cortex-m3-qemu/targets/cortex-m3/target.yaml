@@ -7,13 +7,12 @@ ld-script: lm3s.ld
 link-flags:
   - --specs=nano.specs
   - -nostartfiles
-test-runner:
-  command: qemu-system-arm
-  args:
-    - -machine
-    - lm3s6965evb
-    - -nographic
-    - -semihosting
-    - -kernel
-    - "{binary}"
-  timeout: 30
+# How to execute the image: a target-overridable Run-phase step (the qemu step
+# defaults its command to qemu-system-arm). minuteos run/test resolve this after
+# building. {image} is the linked ELF; {filter} the active test filter.
+steps:
+  - name: qemu
+    phase: Run
+    config:
+      args: '-machine lm3s6965evb -nographic -semihosting -kernel "{image}" -append "{filter}"'
+      timeout: "30"

@@ -9,12 +9,12 @@ would get its startup/linker pieces from `lib-arm`.
 
 | File | Purpose |
 |------|---------|
-| `targets/cortex-m3/target.yaml` | toolchain prefix, arch flags, linker script, and the qemu `test-runner` |
+| `targets/cortex-m3/target.yaml` | toolchain prefix, arch flags, linker script, and the qemu `run` step |
 | `targets/cortex-m3/startup.c` | vector table, reset handler, `.data`/`.bss` init, `main()` entry |
 | `targets/cortex-m3/syscalls.c` | semihosting retargeting of `_write`/`_exit` + newlib stubs |
 | `targets/cortex-m3/lm3s.ld` | LM3S6965 memory map; places the `test_cases` section |
 | `renode/lm3s.repl` | Renode platform (cortex-m3 + flash/ram + semihosting UART) |
-| `renode/run.sh` | adapts Renode to the `{binary}`→stdout test-runner contract |
+| `renode/run.sh` | adapts Renode to the `{image}`→stdout run contract |
 
 ## Usage
 
@@ -28,15 +28,23 @@ configurations:
     config: Release
 ```
 
-The `test-runner` is supplied by `target.yaml`, so any configuration using the
-`cortex-m3` target inherits the qemu invocation:
+The `run` step is supplied by `target.yaml`, so any configuration using the
+`cortex-m3` target inherits the qemu invocation (the `qemu` step defaults its
+command to `qemu-system-arm`):
 
 ```yaml
-test-runner:
-  command: qemu-system-arm
-  args: [-machine, lm3s6965evb, -nographic, -semihosting, -kernel, "{binary}"]
-  timeout: 30
+steps:
+  - name: qemu
+    phase: Run
+    config:
+      args: '-machine lm3s6965evb -nographic -semihosting -kernel "{image}" -append "{filter}"'
+      timeout: "30"
 ```
+
+This replaces the older top-level `test-runner:` field: running the image is now
+an ordinary, target-overridable build step. `{image}` is the linked ELF and
+`{filter}` the active test filter; both `minuteos run` and `minuteos test`
+resolve the same step.
 
 Then:
 
@@ -57,17 +65,20 @@ Total: 2  Passed: 2  Failed: 0
 
 Renode drives a machine from a script rather than executing an ELF directly, so
 this example includes a small wrapper (`renode/run.sh`) that bridges it to the
-test-runner contract. Point a configuration's `test-runner` at it (a config-level
-runner overrides the target's qemu one):
+run contract. Override the run step at the config level (a config-level run step
+overrides the target's qemu one):
 
 ```yaml
 configurations:
   renode:
     target: cortex-m3
     config: Release
-    test-runner:
-      command: /abs/path/to/examples/cortex-m3-qemu/renode/run.sh
-      args: ["{binary}"]
+    steps:
+      - name: run
+        phase: Run
+        config:
+          command: /abs/path/to/examples/cortex-m3-qemu/renode/run.sh
+          args: '"{image}"'
 ```
 
 ```bash

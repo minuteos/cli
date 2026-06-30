@@ -169,25 +169,41 @@ projects need nothing) is a built-in `gcc` pipeline that any target can replace.
 
 ## Test/run as a step
 
-`test-runner` disappears as a top-level field. Instead:
+> **Status: implemented.** Running the image is a target-overridable `Run`-phase
+> step (`run`/`qemu`/`renode`, `RunStep` + `RunSpecResolver` + `RunSpec`); the
+> `Run` phase is excluded from the build pipeline and resolved out-of-band by the
+> run/test commands. The legacy top-level `test-runner` field is kept as a
+> deprecated fallback until step 6. Covered by `RunSpecResolverTests`; validated
+> on the cortex-m3/qemu example.
 
-- The default `run` step executes `Image` directly (host).
-- A target overrides `run` to launch an emulator:
+`test-runner` is no longer special: launching the image is an ordinary,
+target-overridable step.
+
+- With no run step the image executes directly (host).
+- A target overrides it to launch an emulator. The step carries a `command`
+  (the `qemu`/`renode` step names default it to `qemu-system-arm`/`renode`) and a
+  shell-style `args` string whose tokens honor double quotes; `{image}`/`{binary}`
+  and `{filter}` are substituted:
 
   ```yaml
-  # qemu-arm target
-  pipeline-overrides:
-    run:
-      name: qemu
+  # cortex-m3 target.yaml
+  steps:
+    - name: qemu
+      phase: Run
       config:
-        machine: lm3s6965evb
-        args: [-nographic, -semihosting, -kernel, "{image}"]
+        args: '-machine lm3s6965evb -nographic -semihosting -kernel "{image}" -append "{filter}"'
+        timeout: "30"
   ```
 
-- `minuteos run` builds the pipeline through `Image`, then invokes the `run` step.
-- `minuteos test` builds each suite's `Image`, then invokes the same `run` step
-  and parses its output. (The qemu/renode launch + result parsing become the
-  `qemu`/`renode` step's job.)
+- `minuteos run` builds through `Image`, resolves the run step, and launches it
+  with live stdio.
+- `minuteos test` builds each suite's `Image`, resolves the same run step, and
+  runs it captured with a timeout, then parses the output.
+
+(A future enhancement: let the `qemu`/`renode` steps own execution + result
+parsing directly, and give step config first-class list values so `args` need not
+be a shell string. The current launch-spec resolution keeps the change small and
+the validated capture/parse path intact.)
 
 ## Before / after
 
@@ -255,8 +271,11 @@ verifiable:
   now applied). `Toolchain` is reduced to a process runner.
 - [~] 4. objcopy/disassembly/size already run as pipeline steps; remaining work is
   promoting the migrated objcopy to a first-class `gcc:objcopy`
-- [ ] 5. `run`/`qemu`/`renode` steps; retire top-level `test-runner`
-- [ ] 6. drop typed gcc fields from the schema; `migrate` emits `settings`+`pipeline`
+- [x] 5. `run`/`qemu`/`renode` steps (`Run` phase, resolved out-of-band by
+  run/test); top-level `test-runner` demoted to a deprecated fallback. Example
+  updated to the step form.
+- [ ] 6. drop typed gcc fields + the legacy `test-runner` field from the schema;
+  `migrate` emits `settings`+`pipeline`+run step
 - [x] **Source generation / transforms** — in-process `transpile` step (the
   transpiler's integration point, stubbed) + generic external `transform` step,
   shared via `TransformSupport`; mutable source set, generated-header include

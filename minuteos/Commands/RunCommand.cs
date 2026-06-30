@@ -57,9 +57,9 @@ public class RunCommand : LoggingCommand
         if (!await runner.BuildAsync(config, parallelism, cancellationToken))
             return 1;
 
-        // Launch it - directly for host, or via the configured test-runner (qemu/renode).
-        var (program, args) = (config.TestRunner ?? new TestRunnerConfig())
-            .Resolve(config.PrimaryOutput, filter: null);
+        // Launch it - directly for host, or via the configuration's run step (qemu/renode).
+        var spec = RunSpecResolver.Resolve(config, config.PrimaryOutput, filter: null);
+        var (program, args) = (spec.Program, spec.Args);
 
         Logger.LogInformation("");
         Logger.LogInformation("Running: {Program} {Args}", program, string.Join(' ', args));
