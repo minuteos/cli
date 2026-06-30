@@ -98,6 +98,13 @@ public class ConfigurationProfile
     [YamlMember(Alias = "include-dirs")]
     public List<string>? IncludeDirs { get; set; }
 
+    /// <summary>
+    /// Overrides the project source directory (default: src/). Used by sub-build
+    /// configurations like a bootloader that build from their own sources.
+    /// </summary>
+    [YamlMember(Alias = "source-dir")]
+    public string? SourceDir { get; set; }
+
     [YamlMember(Alias = "c-flags")]
     public List<string>? CFlags { get; set; }
 
@@ -144,6 +151,7 @@ public class ConfigurationProfile
         IncludeDirs = other.IncludeDirs ?? IncludeDirs,
         CFlags = other.CFlags ?? CFlags,
         CxxFlags = other.CxxFlags ?? CxxFlags,
+        SourceDir = other.SourceDir ?? SourceDir,
         PrimaryExt = other.PrimaryExt ?? PrimaryExt,
         LdScript = other.LdScript ?? LdScript,
         Steps = other.Steps ?? Steps,

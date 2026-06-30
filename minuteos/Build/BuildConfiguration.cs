@@ -100,8 +100,11 @@ public class BuildConfiguration
         var primaryTarget = profile.Target ?? "host";
         var config = profile.Config ?? "Release";
 
-        // For test-suite builds the suite directory replaces the project src/ dir.
-        var primarySourceDir = overrides?.PrimarySourceDir ?? layout.SourceDir;
+        // The primary source dir is the suite dir (test builds), an explicit
+        // source-dir from the profile (e.g. a bootloader sub-build), else src/.
+        var primarySourceDir = overrides?.PrimarySourceDir
+            ?? (profile.SourceDir != null ? Path.GetFullPath(Path.Combine(projectRoot, profile.SourceDir)) : null)
+            ?? layout.SourceDir;
 
         // === Target resolution with inheritance ===
         // Test builds inject extra targets (e.g. "test") that provide hardware stubs.

@@ -95,9 +95,6 @@ public class BuildRunner
             objectFiles.Add(objPath);
         }
 
-        // Add any extra objects from steps
-        objectFiles.AddRange(state.ExtraObjects);
-
         var semaphore = new SemaphoreSlim(parallelism);
         var errors = new List<string>();
 
@@ -153,6 +150,10 @@ public class BuildRunner
         Info("Linking...");
 
         Directory.CreateDirectory(Path.GetDirectoryName(config.PrimaryOutput)!);
+
+        // Objects contributed by steps (e.g. a sub-build blob) - added here so
+        // PreLink steps can supply them.
+        objectFiles.AddRange(state.ExtraObjects);
 
         var linkResult = await _toolchain.LinkAsync(
             objectFiles, config.PrimaryOutput, config,

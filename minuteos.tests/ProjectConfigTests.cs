@@ -113,6 +113,38 @@ public class ProjectConfigTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_SourceDirAndSubBuildStep()
+    {
+        WriteConfig("""
+            name: t
+            configurations:
+              loader:
+                source-dir: lib/targets/all/loader
+              app:
+                steps:
+                  - name: sub-build
+                    phase: PreLink
+                    config:
+                      configuration: loader
+                      blob-section: .binboot
+            """);
+
+        var config = ProjectConfig.Load(_tempDir);
+
+        var loader = config.Resolve("loader");
+        Assert.Equal("lib/targets/all/loader", loader.SourceDir);
+
+        var app = config.Resolve("app");
+        Assert.NotNull(app.Steps);
+        var step = Assert.Single(app.Steps);
+        Assert.Equal("sub-build", step.Name);
+        Assert.Equal(MinuteOS.Cli.Build.Steps.BuildPhase.PreLink, step.Phase);
+        Assert.NotNull(step.Config);
+        Assert.Equal("loader", step.Config["configuration"]);
+        Assert.Equal(".binboot", step.Config["blob-section"]);
+    }
+
+    [Fact]
     public void Resolve_UnknownConfig_Throws()
     {
         WriteConfig("""

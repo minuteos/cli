@@ -200,11 +200,12 @@ that migrated with nothing left unhandled.
 
 Running `minuteos migrate --delete-make` on the real `minuteos/lib` + `lib-arm`
 auto-converts and deletes 11 of the 12 `Include.mk` files. The one it keeps is the
-recursive bootloader sub-build (which builds a second binary and links it as a
-blob — a planned build step). The result builds and tests purely from YAML (plus
-the generated shell steps) on both host (67/67) and ARM/qemu (68/68). The only
-Make-parsing code lives in one class (`MakeImport`) to be deleted once migration
-is complete.
+recursive bootloader build — its conditional, two-mode Make can't be converted
+mechanically, but the capability it needs (the [`sub-build` step](#the-sub-build-step))
+now exists, so it can be ported declaratively by hand. The result builds and tests
+purely from YAML (plus the generated shell steps) on both host (67/67) and
+ARM/qemu (68/68). The only Make-parsing code lives in one class (`MakeImport`) to
+be deleted once migration is complete.
 
 ## Build Steps
 
@@ -225,6 +226,7 @@ Steps run at specific phases of the build pipeline:
 | `disassembly` | PostBuild | Generate `.S` and `.SS` disassembly files |
 | `binary-output` | PostBuild | Convert ELF to bin/hex/srec via `objcopy` |
 | `shell` | PostBuild | Run an arbitrary command line (see below) |
+| `sub-build` | PreLink | Build another configuration and embed its output as a blob |
 
 ### The `shell` step
 
@@ -244,6 +246,33 @@ steps:
 `{output-dir}` the output directory, `{name}` the output name, and `{objcopy}`
 `{objdump}` `{size}` `{cc}` `{cxx}` are the (prefixed) toolchain programs. This is
 what `migrate` emits for `objcopy`-based Make rules.
+
+### The `sub-build` step
+
+`sub-build` builds another configuration from the same `minuteos.yaml` and embeds
+its output into the current image as a binary blob — the declarative replacement
+for the lib-arm bootloader pattern (and the general "build A, embed it in B"
+case). The embedded program is just another configuration, typically using
+`source-dir:` to build from its own sources:
+
+```yaml
+configurations:
+  bootloader:
+    source-dir: boot          # the bootloader's own sources
+    components: [base]
+  app:
+    components: [kernel]
+    steps:
+      - name: sub-build
+        phase: PreLink
+        config:
+          configuration: bootloader
+          blob-section: .binboot   # objcopy --rename-section .data=<this>
+```
+
+The blob is reachable through objcopy's `_binary_<config>_bin_start/_end/_size`
+symbols and placed in `blob-section`. Verified on ARM/qemu: an app sub-builds a
+loader, embeds it, and reads the embedded bytes back at runtime.
 
 ## Testing
 
