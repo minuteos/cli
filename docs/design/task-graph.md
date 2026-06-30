@@ -47,27 +47,34 @@ The core understands exactly three things and **no toolchain semantics**.
 
 ```
 Artifact
-  Id     : stable identity (a file path for v1; logical value-artifacts are a
-           later extension)
-  Tags   : set<string>, OPAQUE to the engine ("cpp-source", "object", "elf", …)
+  Id          : stable identity — a file path. Logical (non-file) artifacts use a
+                reserved prefix to disambiguate, e.g. "value:version".
+  Properties  : map<string,string>, OPAQUE to the engine
+                e.g. { kind: source, lang: cpp } ; { kind: image, format: elf }
 ```
 
-The engine never interprets a tag. Tags are an **open, step-owned namespace**;
-they exist only so the engine can match producers to consumers. File-backed
-artifacts are fingerprinted by content (hash) or mtime+size for incrementality.
+Artifacts carry **key-value properties**, not bare string tags — so a selector can
+match a single dimension (`kind=source`, any language) or a conjunction
+(`kind=source, lang=cpp`) without consumers enumerating compound names, and so
+properties like `format`/`arch` ride along. (A bare "tag" is just sugar for
+`kind=<tag>`.) The engine never interprets a property; properties are an **open,
+step-owned namespace** used only to match producers to consumers. File artifacts
+are fingerprinted by a **pluggable** strategy (default: mtime+size).
 
 ### Step
 
-A step declares, statically, what tags it consumes and produces, and knows how to
+A step declares, statically, what it consumes and produces, and knows how to
 expand into concrete work once its inputs exist:
 
 ```
 interface IStep
   Name       : string
-  Signature  : { consumes: Selector[], produces: TagSpec[] }
+  Signature  : { consumes: Selector[], produces: PropSpec[] }
   Plan(PlanContext) : IEnumerable<BuildAction>
 
-Selector   : { Tag: string, Glob?: string, Cardinality: One | Many }
+Selector   : a predicate over artifact properties.
+             v1: required key=value pairs (all must match) + Cardinality (One|Many).
+             Later: pluggable custom predicates.
 BuildAction: { Inputs: Artifact[], Outputs: Artifact[],
                Run: async ActionContext -> ActionResult }
 ActionResult: { DiscoveredInputs?: path[],     // depfile-style dynamic deps
@@ -84,7 +91,7 @@ Four domain-free responsibilities, no knowledge of "source", "compile", "link",
 or "image":
 
 1. **Wire** a step graph: an edge `producer → consumer` exists when a consumer's
-   selector tag matches a producer's output tag.
+   selector matches a producer's output properties.
 2. **Schedule** in topological order; run independent nodes/actions in parallel.
 3. **Fingerprint** each action and skip it when unchanged.
 4. **Run** actions and thread produced artifacts downstream.
@@ -100,8 +107,9 @@ is that real builds discover work as they run:
 - **discovered inputs**: compile's true header deps come from the `.d` file
   *after* compiling.
 
-The resolution: **the step graph is wired statically by tags; the concrete action
-fan-out per node is computed lazily, once that node's inputs are materialized.**
+The resolution: **the step graph is wired statically by property match; the
+concrete action fan-out per node is computed lazily, once that node's inputs are
+materialized.**
 
 - Plan phase builds the small **step graph** (nodes = steps, edges = tag matches).
   `transpile(produces cpp-source) → compile(consumes cpp-source)` is an edge even
@@ -124,7 +132,31 @@ skip-when-unchanged uniformly to link/objcopy/everything (today only compile and
 the transforms are incremental; link/objcopy/run always re-run).
 
 Cache lives under `out/<config>/.cache` (fingerprints + recorded dynamic deps).
-Open decision: content-hash (robust) vs mtime+size (cheap) vs hybrid.
+The fingerprint strategy is **pluggable** (an interface); v1 default is mtime+size,
+swappable for content-hash later without touching steps.
+
+### Fan-in: many files contribute to one output
+
+An object isn't a function of its `.cpp` alone — it depends on every header that
+`.cpp` includes. Two distinct sets keep this correct, and they are *not* the same:
+
+- **Graph edges** (producer→consumer artifacts) drive *ordering/scheduling*.
+- **The fingerprint input set** of an action is *every* file that contributes to
+  its output — declared inputs **plus** dynamically discovered deps (the `.d`
+  file) — and drives *skip decisions*. It is a superset of the edges.
+
+So an object's included headers arrive via the depfile and land in the fingerprint
+set; editing any of them rebuilds the object. The distinction that matters:
+
+- a **checked-in** header is *only* a fingerprint input — it already exists, so no
+  edge/ordering is required;
+- a **generated** header (e.g. a transpiler output) is *also* a real **edge**, so
+  it is produced before the compile action runs.
+
+Declared edges guarantee first-build ordering; discovered deps guarantee
+incremental correctness on every build after. The depfile feeds both: anything in
+it that matches a known producer's output is (or confirms) an edge; everything
+else is a leaf fingerprint input.
 
 ## Parallelism
 
@@ -162,30 +194,34 @@ transpiler bundle — not a privilege of the engine.
 
 ## Mapping today's steps onto the contract
 
+Properties are written `key=value`; `kind=X` alone is the common case.
+
 | Step | consumes | produces | actions | dynamic |
 |------|----------|----------|---------|---------|
-| `scan` (was SourceCollector) | source dirs (from settings) | `cpp/c/asm-source` | one artifact per file | outputs discovered at plan |
-| `cs:transpile` | `cs-source` | `cpp-source`, `header-dir` | invoke transpiler | **dynamic outputs** (manifest) |
-| `transform` (external) | declared input glob | declared output tags | invoke tool | dynamic outputs (manifest) |
-| `gcc:compile` | `cpp/c/asm-source` | `object` | one action per source (+PCH) | **dynamic inputs** (`.d`) |
-| `gcc:link` | `object` (many) | `elf` | one action | — |
-| `gcc:objcopy` | `elf` | `bin`/`hex`/`srec` | one per format | — |
-| `sub-build` | a config name | `object` (blob) | nested graph → objcopy | nested |
-| `disassembly` | `elf` | `text` | one action | — |
-| `size` | `elf` | (report, no artifact) | one action | — |
-| `git-version` | — | `header` / defines | one action | — |
-| `run`/`qemu`/`renode` | `elf` | (exit/result) | terminal; invoked out-of-band by run/test | — |
+| `scan` (was SourceCollector) | source dirs (from settings) | `kind=source, lang=c/cpp/asm` | one artifact per file | outputs discovered at plan |
+| `cs:transpile` | `kind=source, lang=cs` | `kind=source, lang=cpp` + `kind=header-dir` | invoke transpiler | **dynamic outputs** (manifest) |
+| `transform` (external) | declared input selector | declared output props | invoke tool | dynamic outputs (manifest) |
+| `gcc:compile` | `kind=source, lang∈{c,cpp,asm}` | `kind=object` | one action per source (+PCH) | **dynamic inputs** (`.d`) |
+| `gcc:link` | `kind=object` (Many) | `kind=image, format=elf` | one action | — |
+| `gcc:objcopy` | `kind=image, format=elf` (One) | `kind=image, format=bin/hex/srec` | one per format | — |
+| `sub-build` | a config name | `kind=object` (blob) | nested graph → objcopy | nested |
+| `disassembly` | `kind=image, format=elf` | `kind=text` | one action | — |
+| `size` | `kind=image, format=elf` | (report, no artifact) | one action | — |
+| `git-version` | — | `kind=header` / defines | one action | — |
+| `run`/`qemu`/`renode` | `kind=executable` (One) | (exit/result) | invoked by run/test | — |
 
-**The bootloader case, resolved:** `sub-build` produces an `object`-tagged
-artifact (the blob); `gcc:link` consumes `object`. The sub-build's own `elf` is
-just an internal artifact of the nested graph. "Image becomes source" stops being
-a special case — opaque tags make it ordinary. That is the whole point.
+**The bootloader case, resolved:** `sub-build` produces a `kind=object` artifact
+(the blob); `gcc:link` consumes `kind=object`. The sub-build's own ELF is just an
+internal artifact of the nested graph. "Image becomes source" stops being a
+special case — opaque properties make it ordinary. That is the whole point.
 
-## Tag conventions (open namespace, engine-opaque)
+## Property conventions (open namespace, engine-opaque)
 
-`<lang>-source` (`cpp-source`, `c-source`, `asm-source`, `cs-source`), `object`,
-`elf`, `bin`/`hex`/`srec`, `header-dir`, `archive`, `text`. Bundles define their
-own; the engine only ever string-matches them.
+`kind` is the primary discriminator: `source` (+ `lang`), `object`, `image`
+(+ `format=elf/bin/hex/srec`), `header-dir`, `header`, `archive`, `text`,
+`executable`. Bundles define their own keys/values; the engine only ever matches
+them. `run`/`test` select their input like any other consumer (`kind=executable`,
+Cardinality One) — there is no separate "terminal" concept.
 
 ## Staging (one frozen contract throughout)
 
@@ -201,17 +237,31 @@ the tool stays green:
 Plugin loading (out-of-tree bundles) is a later, additive layer — explicitly not
 in these stages.
 
-## Open decisions (to settle before coding)
+## Decisions (settled)
 
-1. **Artifact identity** — path-only for v1; defer logical value-artifacts?
-2. **Fingerprint** — content-hash vs mtime+size vs hybrid; cache format.
-3. **Selector matching** — tag-equality only, or tag + path glob + cardinality
-   (One/Many)? (Link needs "all `object`"; objcopy needs "the one `elf`".)
-4. **Terminal artifacts** — how the build's goal artifact(s) are designated (an
-   explicit goal tag, or "whatever the configured pipeline ends at").
-5. **Settings → scan** — structure resolution still supplies which dirs `scan`
-   reads and the defines/includes; confirm that stays in core (it's structural,
-   not toolchain).
-6. **Migration shim** — do we keep the current slot-based `IBuildStep` working
-   during stage 1, or convert all ~12 steps in one move? (Lean: convert together;
-   the set is small and a half-migrated engine is harder to reason about.)
+1. **Artifact model — key-value properties**, not bare tags (see Artifact above).
+2. **Identity — path.** Logical value-artifacts use a reserved prefix
+   (`value:…`) to disambiguate from real paths.
+3. **Fingerprint — pluggable, mtime+size default.** Replaceable with content-hash
+   later behind the same interface; no step changes.
+4. **Selector — property predicate.** v1 = required `key=value` conjunction +
+   Cardinality (One/Many); custom predicates are a later extension. (Link =
+   `kind=object` Many; objcopy/run = `kind=image|executable` One.)
+5. **No terminal concept.** `build` runs all configured steps and produces
+   everything; `run`/`test` are ordinary consumers selecting `kind=executable`
+   (One).
+6. **`scan` is language-specific.** Each bundle ships its own scan step that owns
+   its extensions and tags outputs (`kind=source, lang=…`); the **source dirs**
+   come from the core's structural resolution via the `Settings` bag (structural,
+   not toolchain). Defines/includes likewise stay structural in the bag.
+7. **No compatibility shim.** Convert all ~12 steps to the new contract in one
+   move — this is a prototype; a half-migrated engine is harder to reason about.
+
+## Still open
+
+- Cache file format/layout under `out/<config>/.cache`.
+- Exact `Settings` keys a `scan` step reads for its source dirs (reuse the
+  existing `source-dirs`/`include-dirs` aggregation).
+- Whether `git-version`-style steps that contribute *defines* (not files) do so by
+  producing a value-artifact the compile reads, or by writing into the settings
+  bag before the graph runs.
