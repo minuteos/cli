@@ -27,7 +27,7 @@ public sealed class CsScanStep : IGraphStep
 
         yield return new BuildAction("scan:cs", [], files, _ => Task.FromResult(ActionResult.Ok()))
         {
-            IsUpToDate = () => true,
+            AlwaysRun = true,
         };
     }
 }
@@ -58,6 +58,9 @@ public sealed class TranspileStep : IGraphStep
         var generatedDir = Path.Combine(ctx.Config.OutputRoot, "generated", "cs");
         var projectRoot = ctx.Config.Layout.ProjectRoot;
 
+        // Whole-program: always runs (its produced set isn't known until it runs);
+        // write-if-changed keeps downstream compiles incremental, and the recorded
+        // produced set drives orphan cleanup when a .cs is removed.
         yield return new BuildAction("transpile", inputs, [], async actx =>
         {
             Directory.CreateDirectory(generatedDir);
@@ -93,7 +96,10 @@ public sealed class TranspileStep : IGraphStep
                     inputs.Count, Path.GetRelativePath(projectRoot, generatedDir), changed);
 
             return ActionResult.Ok(produced);
-        });
+        })
+        {
+            AlwaysRun = true,
+        };
     }
 
     private static bool WriteIfChanged(string path, string content)

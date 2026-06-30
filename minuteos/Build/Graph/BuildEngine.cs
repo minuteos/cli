@@ -26,6 +26,8 @@ public sealed class BuildEngine
         bool quiet = false)
     {
         var ordered = TopologicalOrder(steps);
+        var cache = BuildCache.Load(Path.Combine(config.OutputRoot, ".cache"));
+        var seen = new HashSet<string>(StringComparer.Ordinal);
 
         // The artifact pool grows as steps run; each step consumes what matches its
         // selectors and contributes its outputs (lazy fan-out - Plan runs only once
@@ -67,39 +69,50 @@ public sealed class BuildEngine
 
             foreach (var action in actions)
             {
-                var upToDate = action.IsUpToDate?.Invoke() ?? GenericUpToDate(action);
-                if (!upToDate)
-                {
-                    foreach (var output in action.Outputs)
-                        EnsureDirectory(output.Id);
+                seen.Add(action.Label);
 
-                    ActionResult result;
-                    try
-                    {
-                        result = await action.Run(actionContext);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError("Action '{Label}' threw: {Message}", action.Label, ex.Message);
-                        return false;
-                    }
-
-                    if (!result.Success)
-                    {
-                        _logger.LogError("Action '{Label}' failed: {Message}", action.Label, result.Message);
-                        return false;
-                    }
-
-                    // Dynamic outputs (e.g. a transpiler) override the declared set.
-                    pool.AddRange(result.ProducedArtifacts ?? action.Outputs);
-                }
-                else
+                if (!action.AlwaysRun && cache.IsUpToDate(action, action.ConfigKey))
                 {
                     // Skipped but its outputs exist - publish them for downstream steps.
                     pool.AddRange(action.Outputs);
+                    continue;
                 }
+
+                foreach (var output in action.Outputs)
+                    EnsureDirectory(output.Id);
+
+                ActionResult result;
+                try
+                {
+                    result = await action.Run(actionContext);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError("Action '{Label}' threw: {Message}", action.Label, ex.Message);
+                    return false;
+                }
+
+                if (!result.Success)
+                {
+                    _logger.LogError("Action '{Label}' failed: {Message}", action.Label, result.Message);
+                    return false;
+                }
+
+                cache.Record(action, result, action.ConfigKey);
+
+                // Dynamic outputs (e.g. a transpiler) override the declared set.
+                pool.AddRange(result.ProducedArtifacts ?? action.Outputs);
             }
         }
+
+        // Drop vanished actions, delete their orphaned outputs, persist the cache.
+        cache.RetainOnly(seen);
+        foreach (var orphan in cache.Orphans())
+        {
+            try { File.Delete(orphan); _logger.LogDebug("Removed orphan {File}", orphan); }
+            catch { /* best effort */ }
+        }
+        cache.Save();
 
         return true;
     }
@@ -148,26 +161,6 @@ public sealed class BuildEngine
         consumer.Signature.Consumes.Any(selector =>
             producer.Signature.Produces.Any(template =>
                 selector.Required.All(kv => template.TryGetValue(kv.Key, out var v) && v == kv.Value)));
-
-    /// <summary>Generic up-to-date: outputs exist and are newer than every input.</summary>
-    private static bool GenericUpToDate(BuildAction action)
-    {
-        var outputs = action.Outputs.Where(o => IsFile(o.Id)).Select(o => o.Id).ToList();
-        if (outputs.Count == 0)
-            return false; // nothing to compare - always run (e.g. size report)
-        if (!outputs.All(System.IO.File.Exists))
-            return false;
-
-        var oldestOutput = outputs.Min(System.IO.File.GetLastWriteTimeUtc);
-        foreach (var input in action.Inputs.Where(i => IsFile(i.Id)).Select(i => i.Id))
-        {
-            if (!System.IO.File.Exists(input))
-                return false;
-            if (System.IO.File.GetLastWriteTimeUtc(input) > oldestOutput)
-                return false;
-        }
-        return true;
-    }
 
     private static bool IsFile(string id) => !id.Contains(':') || id.Length > 1 && id[1] == ':'; // path, not "value:..."
 

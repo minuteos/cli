@@ -9,8 +9,24 @@ namespace MinuteOS.Cli.Tests;
 /// property-based wiring + topological ordering, and lazy fan-out (a consumer
 /// planning over the artifacts a producer emitted).
 /// </summary>
-public class BuildEngineTests
+public class BuildEngineTests : IDisposable
 {
+    private readonly string _tmp;
+
+    public BuildEngineTests()
+    {
+        _tmp = Path.Combine(Path.GetTempPath(), $"minuteos-engine-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_tmp);
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_tmp))
+            Directory.Delete(_tmp, true);
+    }
+
+    private string P(string rel) => Path.Combine(_tmp, rel);
+
     [Fact]
     public void Artifact_Matches_RequiresAllSelectorPairs()
     {
@@ -37,7 +53,7 @@ public class BuildEngineTests
                 order.Add("link");
                 // Lazy fan-out: sees the objects B produced.
                 Assert.Equal(2, ctx.Inputs.Count);
-                return [Action("img", ctx.Inputs, [Artifact.File("/out/app", ("kind", "image"))])];
+                return [Action("img", ctx.Inputs, [Artifact.File(P("out/app"), ("kind", "image"))])];
             });
 
         // B: source -> object (one per source)
@@ -48,7 +64,7 @@ public class BuildEngineTests
             {
                 order.Add("compile");
                 return ctx.Inputs.Select((s, i) =>
-                    Action($"o{i}", [s], [Artifact.File($"/out/{i}.o", ("kind", "object"))])).ToList();
+                    Action($"o{i}", [s], [Artifact.File(P($"out/{i}.o"), ("kind", "object"))])).ToList();
             });
 
         // A: produces two sources
@@ -58,9 +74,8 @@ public class BuildEngineTests
             plan: _ =>
             {
                 order.Add("scan");
-                return [Action("scan",
-                    [],
-                    [Artifact.File("/src/a.cpp", ("kind", "source")), Artifact.File("/src/b.cpp", ("kind", "source"))])];
+                return [Action("scan", [],
+                    [Artifact.File(P("src/a.cpp"), ("kind", "source")), Artifact.File(P("src/b.cpp"), ("kind", "source"))])];
             });
 
         var engine = new BuildEngine(new Toolchain("", NullLogger.Instance), NullLogger.Instance);
@@ -84,15 +99,13 @@ public class BuildEngineTests
     }
 
     private static BuildAction Action(string label, IReadOnlyList<Artifact> ins, IReadOnlyList<Artifact> outs) =>
-        new(label, ins, outs, _ => Task.FromResult(ActionResult.Ok())) { IsUpToDate = () => true };
+        new(label, ins, outs, _ => Task.FromResult(ActionResult.Ok())) { AlwaysRun = true };
 
-    private static BuildConfiguration FakeConfig()
+    private BuildConfiguration FakeConfig()
     {
-        var root = Path.Combine(Path.GetTempPath(), $"minuteos-engine-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
-        File.WriteAllText(Path.Combine(root, "minuteos.yaml"),
+        File.WriteAllText(Path.Combine(_tmp, "minuteos.yaml"),
             "name: d\nconfigurations:\n  c:\n    target: host\n    components: []\n");
-        return BuildConfiguration.Create(ProjectConfig.Load(root), "c", root);
+        return BuildConfiguration.Create(ProjectConfig.Load(_tmp), "c", _tmp);
     }
 
     private sealed class FakeStep(

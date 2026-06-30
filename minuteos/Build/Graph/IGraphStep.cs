@@ -69,11 +69,17 @@ public sealed record BuildAction(
     Func<ActionContext, Task<ActionResult>> Run)
 {
     /// <summary>
-    /// Optional override of the up-to-date check (e.g. compile's .d-aware logic).
-    /// Returns true when the action can be skipped. Defaults to a generic
-    /// outputs-newer-than-inputs comparison in the executor.
+    /// A fingerprint of config that isn't a file input (e.g. the compile command
+    /// line). When it changes, the action is rebuilt even if inputs are unchanged.
     /// </summary>
-    public Func<bool>? IsUpToDate { get; init; }
+    public string? ConfigKey { get; init; }
+
+    /// <summary>
+    /// Forces execution every build regardless of the cache. Used by dynamic-output
+    /// steps (e.g. a whole-program transpiler) whose declared outputs aren't known
+    /// until they run; they still record their produced set for orphan cleanup.
+    /// </summary>
+    public bool AlwaysRun { get; init; }
 }
 
 /// <summary>

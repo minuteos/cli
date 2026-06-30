@@ -25,10 +25,13 @@ public sealed class GccScanStep : IGraphStep
             .Select(f => Artifact.File(f.FullPath, ("kind", "source"), ("lang", Lang(f.Language))))
             .ToList();
 
-        // Sources already exist on disk; the scan just publishes them (no work).
+        // Sources already exist on disk; the scan just publishes them. Plan
+        // re-enumerates every build, so a skipped action still yields the current
+        // set (added/removed files are reflected); AlwaysRun keeps it cheap and
+        // its outputs fingerprinted for orphan tracking.
         yield return new BuildAction("scan", [], sources, _ => Task.FromResult(ActionResult.Ok()))
         {
-            IsUpToDate = () => true,
+            AlwaysRun = true,
         };
     }
 
@@ -76,26 +79,27 @@ public sealed class GccCompileStep : IGraphStep
         var extraIncludes = ctx.Inputs.Where(a => a.Kind == "header-dir").Select(a => a.Id).ToList();
         var sources = ctx.Inputs.Where(a => a.Kind == "source").ToList();
 
-        // PCH prerequisite (cpp compiles -include it).
+        // PCH prerequisite (cpp compiles -include it). Args are built here so they
+        // serve as the action's config fingerprint.
         Artifact? pchArtifact = null;
         if (config.Pch != null)
         {
             pchArtifact = Artifact.File(config.PchGchFile, ("kind", "pch"));
-            var pchInputs = new[] { Artifact.File(config.Pch, ("kind", "header")) };
-            var pchOutputs = new[] { pchArtifact };
-            yield return new BuildAction("pch", pchInputs, pchOutputs, async actx =>
+            var pchArgs = new List<string> { "-c", config.Pch };
+            GccFlags.AppendCompileFlags(pchArgs, settings, config, [], extraIncludes, Path.GetDirectoryName(config.Pch)!, SourceLanguage.Cpp);
+            pchArgs.AddRange(["-o", config.PchGchFile]);
+
+            yield return new BuildAction("pch", [Artifact.File(config.Pch, ("kind", "header"))], [pchArtifact], async actx =>
             {
-                var args = new List<string> { "-c", config.Pch };
-                GccFlags.AppendCompileFlags(args, settings, config, [], extraIncludes, Path.GetDirectoryName(config.Pch)!, SourceLanguage.Cpp);
-                args.AddRange(["-o", config.PchGchFile]);
                 if (!actx.Quiet)
                     actx.Logger.LogInformation("  precompiling {Pch}", Path.GetFileName(config.Pch));
-                var r = await actx.Toolchain.RunToolAsync(actx.Toolchain.CXX, args, projectRoot, actx.CancellationToken);
+                var r = await actx.Toolchain.RunToolAsync(actx.Toolchain.CXX, pchArgs, projectRoot, actx.CancellationToken);
                 if (!string.IsNullOrWhiteSpace(r.StdErr)) actx.Logger.LogWarning("{Err}", r.StdErr.TrimEnd());
-                return r.Success ? ActionResult.Ok() : ActionResult.Fail($"PCH failed: exit {r.ExitCode}");
+                if (!r.Success) return ActionResult.Fail($"PCH failed: exit {r.ExitCode}");
+                return new ActionResult(true, DiscoveredInputs: DepFile.Parse(DepFile.GetDepPath(config.PchGchFile)));
             })
             {
-                IsUpToDate = () => !Incremental.NeedsRebuild(config.Pch, config.PchGchFile),
+                ConfigKey = string.Join(' ', pchArgs),
             };
         }
 
@@ -111,27 +115,29 @@ public sealed class GccCompileStep : IGraphStep
                 ? new[] { source, pchArtifact }
                 : [source];
 
+            var compiler = lang == SourceLanguage.C ? "gcc" : "g++";
+            var args = new List<string> { "-c", sourcePath };
+            GccFlags.AppendCompileFlags(args, settings, config, [], extraIncludes, Path.GetDirectoryName(sourcePath)!, lang);
+            if (lang == SourceLanguage.Cpp && config.Pch != null &&
+                !sourcePath.EndsWith(".nopch.cpp", StringComparison.Ordinal))
+            {
+                args.AddRange(["-include", config.PchIncludeBase, "-Winvalid-pch"]);
+            }
+            args.AddRange(["-o", objPath]);
+
             yield return new BuildAction($"compile {rel}", inputs, [objArtifact], async actx =>
             {
-                var compiler = lang == SourceLanguage.C ? actx.Toolchain.CC : actx.Toolchain.CXX;
-                var args = new List<string> { "-c", sourcePath };
-                GccFlags.AppendCompileFlags(args, settings, config, [], extraIncludes, Path.GetDirectoryName(sourcePath)!, lang);
-                if (lang == SourceLanguage.Cpp && config.Pch != null &&
-                    !sourcePath.EndsWith(".nopch.cpp", StringComparison.Ordinal))
-                {
-                    args.AddRange(["-include", config.PchIncludeBase, "-Winvalid-pch"]);
-                }
-                args.AddRange(["-o", objPath]);
-
                 if (!actx.Quiet)
-                    actx.Logger.LogInformation("  {Compiler} -c {Source}", lang == SourceLanguage.C ? "gcc" : "g++", rel);
-
-                var r = await actx.Toolchain.RunToolAsync(compiler, args, projectRoot, actx.CancellationToken);
+                    actx.Logger.LogInformation("  {Compiler} -c {Source}", compiler, rel);
+                var program = lang == SourceLanguage.C ? actx.Toolchain.CC : actx.Toolchain.CXX;
+                var r = await actx.Toolchain.RunToolAsync(program, args, projectRoot, actx.CancellationToken);
                 if (!string.IsNullOrWhiteSpace(r.StdErr)) actx.Logger.LogWarning("{Err}", r.StdErr.TrimEnd());
-                return r.Success ? ActionResult.Ok() : ActionResult.Fail($"compile {rel} failed: exit {r.ExitCode}");
+                if (!r.Success) return ActionResult.Fail($"compile {rel} failed: exit {r.ExitCode}");
+                // Discovered header deps from the .d file feed the next up-to-date check.
+                return new ActionResult(true, DiscoveredInputs: DepFile.Parse(DepFile.GetDepPath(objPath)));
             })
             {
-                IsUpToDate = () => !Incremental.NeedsRebuild(sourcePath, objPath),
+                ConfigKey = string.Join(' ', args),
             };
         }
     }
@@ -159,27 +165,27 @@ public sealed class GccLinkStep : IGraphStep
 
         var imageArtifact = Artifact.File(output, ("kind", "image"), ("format", format));
 
+        var args = new List<string> { "-o", output };
+        args.AddRange(s.List("gcc.arch-flags"));
+        args.AddRange(objects.Order());
+
+        var ld = s.Scalar("gcc.ld-script");
+        if (ld != null) args.AddRange(["-T", ld]);
+
+        foreach (var dir in s.List("gcc.link-dirs"))
+            args.AddRange(["-L", dir]);
+
+        var libDirs = config.TargetDirs.Concat(config.ComponentDirs);
+        if (Directory.Exists(config.Layout.SourceDir))
+            libDirs = new[] { config.Layout.SourceDir }.Concat(libDirs);
+        foreach (var dir in libDirs)
+            args.AddRange(["-L", dir]);
+
+        args.AddRange(s.List("gcc.link-flags"));
+        args.Add("-Wl,--gc-sections");
+
         yield return new BuildAction("link", ctx.Inputs, [imageArtifact], async actx =>
         {
-            var args = new List<string> { "-o", output };
-            args.AddRange(s.List("gcc.arch-flags"));
-            args.AddRange(objects.Order());
-
-            var ld = s.Scalar("gcc.ld-script");
-            if (ld != null) args.AddRange(["-T", ld]);
-
-            foreach (var dir in s.List("gcc.link-dirs"))
-                args.AddRange(["-L", dir]);
-
-            var libDirs = config.TargetDirs.Concat(config.ComponentDirs);
-            if (Directory.Exists(config.Layout.SourceDir))
-                libDirs = new[] { config.Layout.SourceDir }.Concat(libDirs);
-            foreach (var dir in libDirs)
-                args.AddRange(["-L", dir]);
-
-            args.AddRange(s.List("gcc.link-flags"));
-            args.Add("-Wl,--gc-sections");
-
             if (!actx.Quiet)
             {
                 actx.Logger.LogInformation("");
@@ -189,6 +195,9 @@ public sealed class GccLinkStep : IGraphStep
             var r = await actx.Toolchain.RunToolAsync(actx.Toolchain.CXX, args, actx.ProjectRoot, actx.CancellationToken);
             if (!string.IsNullOrWhiteSpace(r.StdErr)) actx.Logger.LogWarning("{Err}", r.StdErr.TrimEnd());
             return r.Success ? ActionResult.Ok() : ActionResult.Fail($"link failed: exit {r.ExitCode}");
-        });
+        })
+        {
+            ConfigKey = string.Join(' ', args),
+        };
     }
 }

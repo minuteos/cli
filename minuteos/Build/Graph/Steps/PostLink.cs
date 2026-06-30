@@ -37,7 +37,10 @@ public sealed class GccObjcopyStep(IReadOnlyDictionary<string, string> config) :
                     return ActionResult.Fail($"objcopy -O {format} failed: {r.StdErr.Trim()}");
                 actx.Logger.LogInformation("Generated {File}", outPath);
                 return ActionResult.Ok();
-            });
+            })
+            {
+                ConfigKey = $"-O {format} {string.Join(' ', extra)}",
+            };
         }
     }
 
