@@ -1,6 +1,12 @@
 # Toward a toolchain-agnostic project specification
 
-Status: **proposal / discussion**
+Status: **largely implemented** (steps 1–6; see the status checklist at the end).
+
+> **Successor:** the fixed-slot model here (`Sources`/`Objects`/`Image`) is
+> superseded by the opaque-artifact **task graph** in
+> [`task-graph.md`](task-graph.md), which removes the remaining C++ assumptions
+> from the core. This document records the settings/steps/pipeline groundwork it
+> builds on.
 
 ## Motivation
 
