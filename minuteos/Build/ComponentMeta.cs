@@ -96,6 +96,9 @@ public class ComponentMeta
         meta.Name = componentName;
         return meta;
     }
+
+    /// <summary>Serializes this metadata to YAML (component.yaml form).</summary>
+    public string ToYaml() => MetaYaml.Serializer.Serialize(this);
 }
 
 /// <summary>

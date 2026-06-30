@@ -112,4 +112,7 @@ public class TargetMeta
         meta.Name = targetName;
         return meta;
     }
+
+    /// <summary>Serializes this metadata to YAML (target.yaml form).</summary>
+    public string ToYaml() => MetaYaml.Serializer.Serialize(this);
 }

@@ -1,5 +1,3 @@
-using System.Text.RegularExpressions;
-
 namespace MinuteOS.Cli.Build;
 
 /// <summary>
@@ -7,7 +5,7 @@ namespace MinuteOS.Cli.Build;
 /// with fallback to Include.mk for backwards compatibility.
 /// Uses recursive DFS with cycle detection.
 /// </summary>
-public partial class ComponentResolver
+public class ComponentResolver
 {
     private readonly ProjectLayout _layout;
     private readonly Dictionary<string, ComponentMeta> _metaCache = new();
@@ -55,7 +53,7 @@ public partial class ComponentResolver
 
         // Load metadata and get dependencies
         var meta = LoadComponentMeta(component, targetDirs);
-        var deps = meta?.Requires ?? GetIncludeMkDependencies(component, targetDirs);
+        var deps = meta?.Requires ?? [];
 
         foreach (var dep in deps)
             Resolve(dep, targetDirs, resolved, seen, visiting);
@@ -77,7 +75,7 @@ public partial class ComponentResolver
         {
             var componentDir = Path.Combine(targetDir, component);
             var meta = ComponentMeta.TryLoad(componentDir, component)
-                ?? LoadFromIncludeMk(componentDir, component);
+                ?? MakeImport.LoadComponent(componentDir, component);
             if (meta == null)
                 continue;
 
@@ -109,60 +107,4 @@ public partial class ComponentResolver
 
         return merged;
     }
-
-    /// <summary>
-    /// Builds component metadata from a legacy Include.mk when no component.yaml
-    /// exists. Captures dependencies (COMPONENTS +=) and preprocessor defines
-    /// (DEFINES +=), e.g. testrunner's KERNEL_PLATFORM_HEADER.
-    /// </summary>
-    private static ComponentMeta? LoadFromIncludeMk(string componentDir, string component)
-    {
-        var includeMk = Path.Combine(componentDir, "Include.mk");
-        if (!File.Exists(includeMk))
-            return null;
-
-        var content = File.ReadAllText(includeMk);
-        var meta = new ComponentMeta { ComponentDir = componentDir, Name = component };
-
-        foreach (var m in ComponentsRegex().Matches(content).AsEnumerable())
-            (meta.Requires ??= []).AddRange(SplitTokens(m.Groups[1].Value));
-
-        foreach (var m in DefinesRegex().Matches(content).AsEnumerable())
-            (meta.Defines ??= []).AddRange(SplitTokens(m.Groups[1].Value));
-
-        return meta;
-    }
-
-    private static IEnumerable<string> SplitTokens(string value) =>
-        value.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-    /// <summary>
-    /// Fallback: parse Include.mk for COMPONENTS += lines.
-    /// </summary>
-    private List<string> GetIncludeMkDependencies(string component, IReadOnlyList<string> targetDirs)
-    {
-        var deps = new List<string>();
-
-        foreach (var targetDir in targetDirs)
-        {
-            var includeMk = Path.Combine(targetDir, component, "Include.mk");
-            if (!File.Exists(includeMk))
-                continue;
-
-            var content = File.ReadAllText(includeMk);
-            foreach (var match in ComponentsRegex().Matches(content).AsEnumerable())
-            {
-                var values = match.Groups[1].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                deps.AddRange(values);
-            }
-        }
-
-        return deps;
-    }
-
-    [GeneratedRegex(@"COMPONENTS\s*\+=\s*(.+)$", RegexOptions.Multiline)]
-    private static partial Regex ComponentsRegex();
-
-    [GeneratedRegex(@"DEFINES\s*\+=\s*(.+)$", RegexOptions.Multiline)]
-    private static partial Regex DefinesRegex();
 }

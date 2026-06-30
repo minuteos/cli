@@ -33,6 +33,7 @@ minuteos build
 | `minuteos clean [-c name]` | Remove build artifacts |
 | `minuteos info [-c name]` | Show resolved build configuration |
 | `minuteos init` | Create a `minuteos.yaml` in an existing project |
+| `minuteos migrate [-p dir]` | Convert legacy `Include.mk` files to `component.yaml`/`target.yaml` |
 
 ## Project Configuration
 
@@ -185,6 +186,20 @@ in `minuteos.yaml`.
 
 Directory precedence is most-specific-first, so a target-specific header (e.g.
 `qemu-arm/cortex_defs.h`) overrides the generic one (`cortex-m/...`).
+
+## Migrating off Make
+
+`minuteos migrate` converts a project or lib's `Include.mk` files into native
+`component.yaml` / `target.yaml`, so Make can be removed entirely. It writes one
+YAML file per `Include.mk` and flags any non-declarative content (custom rules
+like `objcopy`-based `binary`/`ihex`/`srec` outputs, bootloader sub-builds) that
+needs a [build step](#build-steps) instead. Use `-n`/`--dry-run` to preview.
+
+The real `minuteos/lib` + `lib-arm` migrate cleanly: after running `migrate` and
+deleting every `Include.mk`, `minuteos test` still passes the full suite on both
+host (67/67) and ARM/qemu (68/68), driven purely by the generated YAML. The
+single piece of Make parsing lives in one class (`MakeImport`) that can be
+deleted once migration is complete.
 
 ## Build Steps
 
