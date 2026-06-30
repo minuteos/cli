@@ -9,7 +9,7 @@ would get its startup/linker pieces from `lib-arm`.
 
 | File | Purpose |
 |------|---------|
-| `targets/cortex-m3/target.yaml` | toolchain prefix, arch flags, linker script, and the qemu `run` step |
+| `targets/cortex-m3/target.yaml` | toolchain config in the generic `settings:` map (gcc.*) + the qemu `run` step |
 | `targets/cortex-m3/startup.c` | vector table, reset handler, `.data`/`.bss` init, `main()` entry |
 | `targets/cortex-m3/syscalls.c` | semihosting retargeting of `_write`/`_exit` + newlib stubs |
 | `targets/cortex-m3/lm3s.ld` | LM3S6965 memory map; places the `test_cases` section |

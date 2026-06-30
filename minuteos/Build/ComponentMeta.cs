@@ -62,6 +62,13 @@ public class ComponentMeta
     public List<StepReference>? Steps { get; set; }
 
     /// <summary>
+    /// Generic, toolchain-agnostic settings merged into the build's Settings bag
+    /// (e.g. <c>gcc.c-flags</c>). The forward-looking form that <c>migrate</c>
+    /// emits; the typed flag fields above are a deprecated alias.
+    /// </summary>
+    public Dictionary<string, object>? Settings { get; set; }
+
+    /// <summary>
     /// Source file patterns to exclude from compilation.
     /// </summary>
     [YamlMember(Alias = "exclude-sources")]

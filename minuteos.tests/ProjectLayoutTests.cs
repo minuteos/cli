@@ -1,4 +1,5 @@
 using MinuteOS.Cli.Build;
+using MinuteOS.Cli.Build.Steps;
 
 namespace MinuteOS.Cli.Tests;
 
@@ -121,21 +122,24 @@ public class ProjectLayoutTests : IDisposable
 
         Assert.Contains("cmsis", chain);  // TARGETS += parsed
         var cm = meta["cortex-m"];
-        Assert.Equal("arm-none-eabi-", cm.ToolchainPrefix);
-        Assert.Equal(".axf", cm.PrimaryExt);
-        Assert.Equal("default.ld", cm.LdScript);
-        Assert.NotNull(cm.ArchFlags);
-        Assert.Contains("-mthumb", cm.ArchFlags);
 
-        // Define quotes are unescaped from Make form.
+        // Toolchain-specific values land in the generic settings map (gcc.*).
+        Assert.NotNull(cm.Settings);
+        Assert.Equal("arm-none-eabi-", cm.Settings["gcc.toolchain-prefix"]);
+        Assert.Equal(".axf", cm.Settings["gcc.primary-ext"]);
+        Assert.Equal("default.ld", cm.Settings["gcc.ld-script"]);
+        var arch = (List<string>)cm.Settings["gcc.arch-flags"];
+        Assert.Contains("-mthumb", arch);
+
+        // Define quotes are unescaped from Make form (defines stay typed).
         Assert.NotNull(cm.Defines);
         Assert.Contains("LINKER_ORDERED_SECTION=\".text.ord\"", cm.Defines);
 
         // LINK_FLAGS: static tokens kept, $(...) tokens dropped.
-        Assert.NotNull(cm.LinkFlags);
-        Assert.Contains("-nostartfiles", cm.LinkFlags);
-        Assert.Contains("-specs=nano.specs", cm.LinkFlags);
-        Assert.DoesNotContain(cm.LinkFlags, f => f.Contains("$("));
+        var linkFlags = (List<string>)cm.Settings["gcc.link-flags"];
+        Assert.Contains("-nostartfiles", linkFlags);
+        Assert.Contains("-specs=nano.specs", linkFlags);
+        Assert.DoesNotContain(linkFlags, f => f.Contains("$("));
     }
 
     [Fact]
@@ -150,14 +154,17 @@ public class ProjectLayoutTests : IDisposable
         var layout = new ProjectLayout(_tempDir);
         layout.ResolveTargetChain("qemu-arm", out var meta);
 
-        var tr = meta["qemu-arm"].TestRunner;
-        Assert.NotNull(tr);
-        Assert.Equal("qemu-system-arm", tr.Command);
-        // Remaining TEST_RUN tokens, then {binary}, then TEST_RUN_ARGS with the
-        // filter placeholder (quotes stripped, $(TEST_FILTERS) -> {filter}).
+        // TEST_RUN becomes a Run-phase step (the test-runner replacement).
+        var steps = meta["qemu-arm"].Steps;
+        Assert.NotNull(steps);
+        var run = Assert.Single(steps, s => s.Name == "run");
+        Assert.Equal(BuildPhase.Run, run.Phase);
+        Assert.Equal("qemu-system-arm", run.Config!["command"]);
+        // Remaining TEST_RUN tokens, then {image}, then TEST_RUN_ARGS with the
+        // filter placeholder; placeholders quoted for the shell-style args string.
         Assert.Equal(
-            ["-machine", "lm3s6965evb", "-nographic", "-semihosting", "-kernel", "{binary}", "-append", "{filter}"],
-            tr.Args);
+            "-machine lm3s6965evb -nographic -semihosting -kernel \"{image}\" -append \"{filter}\"",
+            run.Config!["args"]);
     }
 
     [Fact]

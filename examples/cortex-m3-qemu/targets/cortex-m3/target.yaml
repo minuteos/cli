@@ -1,12 +1,15 @@
-toolchain-prefix: arm-none-eabi-
-primary-ext: .elf
-arch-flags:
-  - -mcpu=cortex-m3
-  - -mthumb
-ld-script: lm3s.ld
-link-flags:
-  - --specs=nano.specs
-  - -nostartfiles
+# Toolchain configuration lives in the generic settings map (the core knows no
+# toolchain; the gcc.* keys are read by the gcc compile/link steps).
+settings:
+  gcc.toolchain-prefix: arm-none-eabi-
+  gcc.primary-ext: .elf
+  gcc.arch-flags:
+    - -mcpu=cortex-m3
+    - -mthumb
+  gcc.ld-script: lm3s.ld
+  gcc.link-flags:
+    - --specs=nano.specs
+    - -nostartfiles
 # How to execute the image: a target-overridable Run-phase step (the qemu step
 # defaults its command to qemu-system-arm). minuteos run/test resolve this after
 # building. {image} is the linked ELF; {filter} the active test filter.

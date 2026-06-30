@@ -37,13 +37,15 @@ public static partial class MakeImport
         var defines = ImportDefines(content);
         if (defines.Count > 0) meta.Defines = defines;
 
+        // Compiler flags go into the toolchain-agnostic settings map.
+        var settings = new Dictionary<string, object>();
         var cFlags = MkAppend(content, "C_FLAGS_EXTRA").Where(Static).ToList();
-        if (cFlags.Count > 0) meta.CFlags = cFlags;
+        if (cFlags.Count > 0) settings["gcc.c-flags"] = cFlags;
         var cxxFlags = MkAppend(content, "CXX_FLAGS_EXTRA").Where(Static).ToList();
-        if (cxxFlags.Count > 0) meta.CxxFlags = cxxFlags;
+        if (cxxFlags.Count > 0) settings["gcc.cxx-flags"] = cxxFlags;
+        if (settings.Count > 0) meta.Settings = settings;
 
-        var hasContent = meta.Requires != null || meta.Defines != null ||
-            meta.CFlags != null || meta.CxxFlags != null;
+        var hasContent = meta.Requires != null || meta.Defines != null || meta.Settings != null;
         return hasContent ? meta : null;
     }
 
@@ -65,40 +67,42 @@ public static partial class MakeImport
         var components = MkAppend(content, "COMPONENTS");
         if (components.Count > 0) meta.Components = components;
 
+        // Toolchain-specific values go into the generic settings map (gcc.*).
+        var settings = new Dictionary<string, object>();
+
         var prefix = MkAssign(content, "TOOLCHAIN_PREFIX");
-        if (prefix != null && Static(prefix)) meta.ToolchainPrefix = prefix;
+        if (prefix != null && Static(prefix)) settings["gcc.toolchain-prefix"] = prefix;
 
         var ext = MkAssign(content, "PRIMARY_EXT");
-        if (ext != null && Static(ext)) meta.PrimaryExt = ext;
+        if (ext != null && Static(ext)) settings["gcc.primary-ext"] = ext;
 
         var ld = MkAssign(content, "LD_SCRIPT");
-        if (ld != null && Static(ld)) meta.LdScript = ld;
+        if (ld != null && Static(ld)) settings["gcc.ld-script"] = ld;
 
         var arch = MkAssign(content, "ARCH_FLAGS");
-        if (arch != null && Static(arch)) meta.ArchFlags = MkTokens(arch).ToList();
+        if (arch != null && Static(arch)) settings["gcc.arch-flags"] = MkTokens(arch).ToList();
 
         var linkFlags = MkAppend(content, "LINK_FLAGS").Where(Static).ToList();
-        if (linkFlags.Count > 0) meta.LinkFlags = linkFlags;
+        if (linkFlags.Count > 0) settings["gcc.link-flags"] = linkFlags;
 
         var linkDirs = MkAppend(content, "LINK_DIRS")
             .Select(d => Regex.Replace(d, @"\$\(\w+_DIR\)", ""))  // $(NAME_DIR) = target dir
             .Where(Static)
             .ToList();
-        if (linkDirs.Count > 0) meta.LinkDirs = linkDirs;
+        if (linkDirs.Count > 0) settings["gcc.link-dirs"] = linkDirs;
+
+        if (settings.Count > 0) meta.Settings = settings;
 
         var defines = ImportDefines(content);
         if (defines.Count > 0) meta.Defines = defines;
 
-        meta.TestRunner = ImportTestRunner(content);
-
         var steps = ImportObjcopySteps(content);
+        var runStep = ImportRunStep(content);   // TEST_RUN -> a Run-phase step
+        if (runStep != null) steps.Add(runStep);
         if (steps.Count > 0) meta.Steps = steps;
 
         var hasContent = meta.Requires != null || meta.Components != null ||
-            meta.ToolchainPrefix != null || meta.PrimaryExt != null ||
-            meta.LdScript != null || meta.ArchFlags != null || meta.LinkFlags != null ||
-            meta.LinkDirs != null || meta.Defines != null || meta.TestRunner != null ||
-            meta.Steps != null;
+            meta.Settings != null || meta.Defines != null || meta.Steps != null;
         return hasContent ? meta : null;
     }
 
@@ -108,10 +112,14 @@ public static partial class MakeImport
             .Select(d => d.Replace("\\\"", "\""))   // Make-escaped quotes -> real quotes
             .ToList();
 
-    private static TestRunnerConfig? ImportTestRunner(string content)
+    /// <summary>
+    /// Converts the Make <c>TEST_RUN</c> emulator invocation into a Run-phase
+    /// step (the target-overridable replacement for the old test-runner). TEST_RUN
+    /// is the command + leading args; the image is appended (e.g.
+    /// <c>qemu-system-arm ... -kernel &lt;image&gt;</c>), then TEST_RUN_ARGS.
+    /// </summary>
+    private static StepReference? ImportRunStep(string content)
     {
-        // TEST_RUN is the emulator invocation; the test binary is appended after
-        // it (e.g. `qemu-system-arm ... -kernel <binary>`), then TEST_RUN_ARGS.
         var testRun = MkAssign(content, "TEST_RUN");
         if (testRun == null || !Static(testRun))
             return null;
@@ -121,7 +129,7 @@ public static partial class MakeImport
             return null;
 
         var args = tokens.Skip(1).ToList();
-        args.Add("{binary}");
+        args.Add("{image}");
 
         var testRunArgs = MkAssign(content, "TEST_RUN_ARGS");
         if (testRunArgs != null)
@@ -135,7 +143,21 @@ public static partial class MakeImport
             }
         }
 
-        return new TestRunnerConfig { Command = tokens[0], Args = args };
+        // Join into a shell-style args string; quote placeholders (they may expand
+        // to a path with spaces) and any token containing whitespace.
+        var argString = string.Join(' ', args.Select(a =>
+            a.Contains(' ') || a.Contains('{') ? $"\"{a}\"" : a));
+
+        return new StepReference
+        {
+            Name = "run",
+            Phase = BuildPhase.Run,
+            Config = new Dictionary<string, string>
+            {
+                ["command"] = tokens[0],
+                ["args"] = argString,
+            },
+        };
     }
 
     // Matches the common objcopy output rule + recipe, e.g.

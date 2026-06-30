@@ -134,6 +134,10 @@ public class BuildConfiguration
         var targetLinkDirs = new List<string>();
         var targetComponents = new List<string>();
         var stepRefs = new List<StepReference>();
+        // Explicit toolchain-agnostic settings maps, gathered in precedence order
+        // (target chain parents-first, then components, then profile) and merged
+        // into the Settings bag after the typed-field folding below.
+        var settingsMaps = new List<Dictionary<string, object>>();
 
         // targetNames are ordered parents-first, so iterating and keeping the
         // last value gives the most-specific (child) target precedence for
@@ -154,6 +158,7 @@ public class BuildConfiguration
             if (tmeta.LinkFlags != null) targetLinkFlags.AddRange(tmeta.LinkFlags);
             if (tmeta.Components != null) targetComponents.AddRange(tmeta.Components);
             if (tmeta.Steps != null) stepRefs.AddRange(tmeta.Steps);
+            if (tmeta.Settings != null) settingsMaps.Add(tmeta.Settings);
 
             if (tmeta.LinkDirs != null)
             {
@@ -215,11 +220,16 @@ public class BuildConfiguration
             if (meta.CxxFlags != null) componentCxxFlags.AddRange(meta.CxxFlags);
             if (meta.LinkFlags != null) componentLinkFlags.AddRange(meta.LinkFlags);
             if (meta.Steps != null) stepRefs.AddRange(meta.Steps);
+            if (meta.Settings != null) settingsMaps.Add(meta.Settings);
         }
 
         // Steps from project-level config
         if (profile.Steps != null)
             stepRefs.AddRange(profile.Steps);
+
+        // Profile settings have the highest precedence (merged last).
+        if (profile.Settings != null)
+            settingsMaps.Add(profile.Settings);
 
         // === Assemble include dirs ===
         var includeDirs = new List<string>();
@@ -269,23 +279,9 @@ public class BuildConfiguration
         if (profile.Defines != null)
             defines.AddRange(profile.Defines);
 
-        // Resolve ld-script if specified
+        // The ld-script is resolved (bare name -> path) after the settings bag is
+        // assembled, so an explicit `settings: { gcc.ld-script: ... }` is honored.
         string? ldScriptPath = null;
-        if (resolvedLdScript != null)
-        {
-            // Search in link dirs, then target dirs
-            var searchDirs = targetLinkDirs.Concat(targetDirs).Concat(componentDirs);
-            foreach (var dir in searchDirs)
-            {
-                var candidate = Path.Combine(dir, resolvedLdScript);
-                if (File.Exists(candidate))
-                {
-                    ldScriptPath = candidate;
-                    break;
-                }
-            }
-            ldScriptPath ??= resolvedLdScript;
-        }
 
         // Resolve test runner: profile takes precedence, else the most specific
         // target (child-first) that declares one.
@@ -299,8 +295,9 @@ public class BuildConfiguration
             }
         }
 
-        // Aggregate the toolchain-agnostic settings bag. For now this is derived
-        // from the resolved typed values; the steps will read from here.
+        // Aggregate the toolchain-agnostic settings bag. The typed fields fold in
+        // first (a deprecated alias), then explicit `settings:` maps are merged on
+        // top - so settings is the single source of truth for the steps.
         var settings = new Settings();
         settings.Add("defines", defines);
         settings.Add("include-dirs", includeDirs);
@@ -308,13 +305,37 @@ public class BuildConfiguration
         settings.Add("gcc.c-flags", (profile.CFlags ?? []).Concat(componentCFlags));
         settings.Add("gcc.cxx-flags", (profile.CxxFlags ?? []).Concat(componentCxxFlags));
         // Target link-flags (e.g. --specs/-nostartfiles) first, then profile +
-        // components. The bag is the single source of truth for the link step.
+        // components.
         settings.Add("gcc.link-flags", targetLinkFlags);
         settings.Add("gcc.link-flags", (profile.LinkFlags ?? []).Concat(componentLinkFlags));
         settings.Add("gcc.link-dirs", targetLinkDirs);
         settings.Set("gcc.toolchain-prefix", resolvedToolchainPrefix);
-        settings.Set("gcc.ld-script", ldScriptPath);
+        settings.Set("gcc.ld-script", resolvedLdScript);
         settings.Set("gcc.primary-ext", resolvedPrimaryExt);
+
+        // Merge the explicit settings maps (target chain, components, profile, in
+        // precedence order). Scalars resolve to the last (most-specific) value.
+        foreach (var map in settingsMaps)
+            MergeSettings(settings, map);
+
+        // Re-derive the resolved scalars from the now-authoritative bag so an
+        // explicit settings entry takes effect for these too.
+        resolvedToolchainPrefix = settings.Scalar("gcc.toolchain-prefix");
+        resolvedPrimaryExt = settings.Scalar("gcc.primary-ext") ?? ".elf";
+
+        // Resolve the ld-script name to a path via the link search dirs and store
+        // the concrete path back so the link step emits a usable -T argument.
+        var ldScriptName = settings.Scalar("gcc.ld-script");
+        if (ldScriptName != null)
+        {
+            foreach (var dir in targetLinkDirs.Concat(targetDirs).Concat(componentDirs))
+            {
+                var candidate = Path.Combine(dir, ldScriptName);
+                if (File.Exists(candidate)) { ldScriptPath = candidate; break; }
+            }
+            ldScriptPath ??= ldScriptName;
+            settings.Set("gcc.ld-script", ldScriptPath);
+        }
 
         return new BuildConfiguration
         {
@@ -362,6 +383,25 @@ public class BuildConfiguration
             OutputSubdir = overrides?.OutputSubdir,
         };
     }
+
+    /// <summary>
+    /// Merges a raw YAML settings map (each value a scalar or a sequence) into the
+    /// Settings bag, appending so list keys accumulate and scalar keys resolve to
+    /// the most-specific (last-merged) value.
+    /// </summary>
+    private static void MergeSettings(Settings settings, Dictionary<string, object> map)
+    {
+        foreach (var (key, value) in map)
+            settings.Add(key, NormalizeSettingValue(value));
+    }
+
+    private static IEnumerable<string> NormalizeSettingValue(object? value) => value switch
+    {
+        null => [],
+        string s => [s],
+        System.Collections.IEnumerable e => e.Cast<object?>().Select(o => o?.ToString() ?? ""),
+        _ => [value.ToString() ?? ""],
+    };
 
     /// <summary>
     /// Resolves a source dir pattern that may contain glob wildcards.

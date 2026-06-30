@@ -78,7 +78,17 @@ public class TargetMeta
     public List<StepReference>? Steps { get; set; }
 
     /// <summary>
+    /// Generic, toolchain-agnostic settings merged into the build's Settings bag.
+    /// Keys are canonical bag keys (flat <c>defines</c>/<c>include-dirs</c>,
+    /// namespaced <c>gcc.*</c>); each value is a scalar or a list. This is the
+    /// forward-looking form that <c>migrate</c> emits; the typed gcc fields above
+    /// are a deprecated alias kept for backward compatibility.
+    /// </summary>
+    public Dictionary<string, object>? Settings { get; set; }
+
+    /// <summary>
     /// How to execute compiled test binaries on this target (e.g. an emulator).
+    /// Deprecated: prefer a <c>run</c>/<c>qemu</c>/<c>renode</c> step (phase Run).
     /// </summary>
     [YamlMember(Alias = "test-runner")]
     public TestRunnerConfig? TestRunner { get; set; }

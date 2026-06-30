@@ -274,8 +274,13 @@ verifiable:
 - [x] 5. `run`/`qemu`/`renode` steps (`Run` phase, resolved out-of-band by
   run/test); top-level `test-runner` demoted to a deprecated fallback. Example
   updated to the step form.
-- [ ] 6. drop typed gcc fields + the legacy `test-runner` field from the schema;
-  `migrate` emits `settings`+`pipeline`+run step
+- [x] 6. Generic `settings:` map (scalar or list values) on target/component/
+  config, merged into the bag with target→component→profile precedence; the bag
+  is authoritative (toolchain prefix / primary-ext / ld-script re-derived from
+  it). `migrate`/`MakeImport` emit `settings:` (gcc.*) + a `run` step instead of
+  the typed gcc / `test-runner` fields. The typed gcc fields remain readable as a
+  **deprecated alias** (not yet hard-removed, so existing/real-lib YAML still
+  builds); a settings-only target builds byte-identically to the typed form.
 - [x] **Source generation / transforms** — in-process `transpile` step (the
   transpiler's integration point, stubbed) + generic external `transform` step,
   shared via `TransformSupport`; mutable source set, generated-header include

@@ -129,6 +129,14 @@ public class ConfigurationProfile
     public List<StepReference>? Steps { get; set; }
 
     /// <summary>
+    /// Generic, toolchain-agnostic settings merged into the build's Settings bag
+    /// (flat <c>defines</c>/<c>include-dirs</c>, namespaced <c>gcc.*</c>; each
+    /// value a scalar or list). The forward-looking form; the typed gcc fields
+    /// above are a deprecated alias.
+    /// </summary>
+    public Dictionary<string, object>? Settings { get; set; }
+
+    /// <summary>
     /// How to execute compiled test binaries for this configuration.
     /// Targets can also provide one (e.g. an emulator); the profile takes precedence.
     /// </summary>
@@ -155,6 +163,7 @@ public class ConfigurationProfile
         PrimaryExt = other.PrimaryExt ?? PrimaryExt,
         LdScript = other.LdScript ?? LdScript,
         Steps = other.Steps ?? Steps,
+        Settings = other.Settings ?? Settings,
         TestRunner = other.TestRunner ?? TestRunner,
     };
 }
