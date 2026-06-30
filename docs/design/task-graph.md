@@ -158,6 +158,36 @@ incremental correctness on every build after. The depfile feeds both: anything i
 it that matches a known producer's output is (or confirms) an edge; everything
 else is a leaf fingerprint input.
 
+### Worked example: the transpiler (dynamic outputs)
+
+The C#→C++ transpiler is the load-bearing case, and it exercises *both* dynamic
+mechanisms. A `.cs` edit may update any number of `.cpp`/`.h` — unknowable until
+the pass runs. The model handles it without anticipating the output set:
+
+1. The `cs:transpile` action consumes **all** `kind=source, lang=cs` artifacts
+   (whole-program), so any `.cs` change is in its fingerprint input set → the pass
+   re-runs. It is one action, so "always re-runs on any `.cs` change" is cheap.
+2. It reports `ProducedArtifacts` — the actual `.cpp`/`.h` it wrote, knowable only
+   after running. The engine diffs this against the previous run's recorded set:
+   new/changed → downstream rebuilds; identical → skipped; **vanished** (a `.cs`
+   was deleted) → that artifact and its downstream object are pruned.
+3. **Lazy fan-out**: `gcc:compile.Plan()` runs *after* the transpiler's outputs
+   materialize, so it sees the current `.cpp` set each build — adding/removing a
+   `.cs` adds/removes compile actions automatically.
+4. **Minimal recompile**: the transpiler writes content-identically when nothing
+   changed (write-if-changed), so unchanged `.cpp` keep their mtime → per-file
+   compile fingerprints match → those objects are **skipped**. The pass always
+   runs; recompilation stays proportional to what actually changed.
+5. **Cross-unit headers**: a generated `.h` included by many `.cpp` lands in each
+   object's `.d` (dynamic inputs), so moving it recompiles exactly its includers —
+   the fan-in mechanism above, on top of the dynamic outputs.
+
+So dynamic **outputs** (`ProducedArtifacts` + lazy fan-out) answer "which `.cpp`
+exist," and dynamic **inputs** (`.d`) answer "which must recompile when a shared
+generated header changes." The one extra obligation this places on the engine is
+**orphan cleanup**: when the produced set shrinks, delete the now-unproduced
+`.cpp`/`.o` so a stale object is never linked.
+
 ## Parallelism
 
 One scheduler: a ready-queue over the action DAG + a worker pool. This replaces
