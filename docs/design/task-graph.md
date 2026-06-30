@@ -1,7 +1,17 @@
 # A toolchain-agnostic task-graph core
 
-Status: **proposal / discussion** (supersedes the fixed-slot model in
-`generalized-spec.md`). Paper first — no code until the contract is settled.
+Status: **stage 1 implemented** (supersedes the fixed-slot model in
+`generalized-spec.md`).
+
+> **Implementation progress.** Stage 1 (engine + frozen contract + native gcc
+> bundle: `scan`→`compile`→`link`, sequential, per-action up-to-date check) is
+> built under `minuteos/Build/Graph/` and reachable via `minuteos build --graph`.
+> Validated **byte-identical** toolchain command lines vs the legacy runner on the
+> host+ARM/qemu anchor; binaries run; no-op rebuilds do zero work. Remaining:
+> port `objcopy`/`transpile`/`transform`/`sub-build`/`git-version`/`disassembly`/
+> `size` onto the contract, the settings-ambient augmenter ordering, the
+> fingerprint cache + orphan cleanup, the parallel scheduler, then retire the
+> legacy `BuildRunner`.
 
 ## Why
 

@@ -16,6 +16,9 @@ public class BuildCommand : LoggingCommand
     [Option("--project", "-p", Description = "Project root directory")]
     public string? ProjectDir { get; set; }
 
+    [Option("--graph", Description = "Build through the experimental task-graph engine")]
+    public bool Graph { get; set; }
+
     public async Task<int> ExecuteAsync(CancellationToken cancellationToken)
     {
         var projectRoot = ProjectConfig.GetProjectRoot(ProjectDir);
@@ -61,11 +64,20 @@ public class BuildCommand : LoggingCommand
             }
 
             var toolchain = new Toolchain(config.Profile.ToolchainPrefix ?? "", Logger);
-            var stepRegistry = StepRegistry.CreateDefault();
             var parallelism = Jobs > 0 ? Jobs : Environment.ProcessorCount;
-            var runner = new BuildRunner(toolchain, stepRegistry, Logger);
 
-            if (!await runner.BuildAsync(config, parallelism, cancellationToken))
+            bool built;
+            if (Graph)
+            {
+                built = await Build.Graph.GraphRunner.BuildAsync(config, toolchain, Logger, cancellationToken);
+            }
+            else
+            {
+                var runner = new BuildRunner(toolchain, StepRegistry.CreateDefault(), Logger);
+                built = await runner.BuildAsync(config, parallelism, cancellationToken);
+            }
+
+            if (!built)
                 success = false;
 
             Logger.LogInformation("");
