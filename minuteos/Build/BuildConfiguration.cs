@@ -46,6 +46,12 @@ public class BuildConfiguration
     public required List<string> LinkDirs { get; init; }
 
     /// <summary>
+    /// Aggregated, toolchain-agnostic settings consumed by build steps.
+    /// The typed fields above are gradually becoming views over this.
+    /// </summary>
+    public required Settings Settings { get; init; }
+
+    /// <summary>
     /// How to run compiled test binaries for this configuration, if any.
     /// </summary>
     public TestRunnerConfig? TestRunner { get; init; }
@@ -293,6 +299,20 @@ public class BuildConfiguration
             }
         }
 
+        // Aggregate the toolchain-agnostic settings bag. For now this is derived
+        // from the resolved typed values; the steps will read from here.
+        var settings = new Settings();
+        settings.Add("defines", defines);
+        settings.Add("include-dirs", includeDirs);
+        settings.Add("gcc.arch-flags", resolvedArchFlags);
+        settings.Add("gcc.c-flags", (profile.CFlags ?? []).Concat(componentCFlags));
+        settings.Add("gcc.cxx-flags", (profile.CxxFlags ?? []).Concat(componentCxxFlags));
+        settings.Add("gcc.link-flags", (profile.LinkFlags ?? []).Concat(componentLinkFlags));
+        settings.Add("gcc.link-dirs", targetLinkDirs);
+        settings.Set("gcc.toolchain-prefix", resolvedToolchainPrefix);
+        settings.Set("gcc.ld-script", ldScriptPath);
+        settings.Set("gcc.primary-ext", resolvedPrimaryExt);
+
         return new BuildConfiguration
         {
             Name = configName,
@@ -333,6 +353,7 @@ public class BuildConfiguration
             PrimaryExt = resolvedPrimaryExt,
             LdScript = ldScriptPath,
             LinkDirs = targetLinkDirs,
+            Settings = settings,
             TestRunner = resolvedTestRunner,
             OutputNameOverride = overrides?.OutputName,
             OutputSubdir = overrides?.OutputSubdir,

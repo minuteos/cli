@@ -61,6 +61,10 @@ public class InfoCommand : LoggingCommand
             if (config.StepRefs.Count > 0)
                 Console.WriteLine($"  Steps:        {string.Join(", ", config.StepRefs.Select(s => s.Name))}");
 
+            Console.WriteLine("  Settings:");
+            foreach (var (key, values) in config.Settings.All.OrderBy(kv => kv.Key))
+                Console.WriteLine($"    {key}: {string.Join(" ", values)}");
+
             Console.WriteLine();
         }
 

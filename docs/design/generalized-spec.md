@@ -146,23 +146,30 @@ verifiable:
 6. **Drop the typed gcc fields** from the schema (keep `MakeImport` emitting
    settings); update `migrate` to emit `settings:` + `pipeline`.
 
-## Open decisions
+## Decisions
 
-1. **Setting names — flat or namespaced?** `arch-flags` vs `gcc.arch-flags`.
-   Flat reads better; namespacing makes ownership explicit and avoids collisions
-   between toolchains. Are `defines`/`include-dirs` "universal" (unprefixed) while
-   `arch-flags`/`toolchain-prefix` are `gcc.*`?
-2. **Default pipeline — built-in or data-driven?** Ship a built-in `gcc`
-   pipeline (simple projects need nothing) vs. require every project/lib to
-   declare/inherit a pipeline (the core ships *zero* toolchain knowledge).
-   Proposal: built-in default that is fully overridable.
-3. **Pipeline override granularity.** Replace the whole `pipeline`, or override
-   individual steps by name (`pipeline-overrides`)? Both? The qemu `run` override
-   wants per-step; a vendor SDK might want whole-pipeline.
-4. **How much stays typed.** Keep `requires`/`components`/`source-dir`/`steps` as
-   first-class (they are structural, not toolchain), and put *only* compiler/
-   linker specifics into `settings`? (Proposed: yes.)
-5. **Step IO contract.** Are the artifact slots (`Sources`/`Objects`/`Image`)
-   enough, or do we need steps to declare arbitrary typed inputs/outputs (closer
-   to a generic build graph)? Proposal: start with the fixed slots; add a generic
-   bag for the rest.
+1. **Setting names — hybrid.** Near-universal C concepts are flat (`defines`,
+   `include-dirs`); genuinely toolchain-specific settings are namespaced by the
+   step family that reads them (`gcc.arch-flags`, `gcc.toolchain-prefix`,
+   `gcc.c-flags`, `gcc.cxx-flags`, `gcc.link-flags`, `gcc.ld-script`,
+   `gcc.link-dirs`, `gcc.primary-ext`).
+2. **Default pipeline — built-in, fully overridable.** The tool ships a default
+   `[gcc:compile, gcc:link, gcc:objcopy, run]` pipeline so trivial projects need
+   no declaration; any target may replace it or override individual steps.
+3. **Pipeline overrides — per-step by name *and* whole-pipeline replace.** A
+   target overrides one step by name (`run` -> `qemu`) leaving the rest
+   inherited, or replaces the whole `pipeline` for a radically different flow.
+4. **Structure stays typed.** `requires`/`components`/`source-dir`/`steps`/
+   `pipeline` stay first-class (they are structural). Only compiler/linker
+   specifics move into `settings`.
+5. **Step IO contract — fixed slots first.** `Sources`/`Objects`/`Image` plus a
+   generic `Outputs` bag; revisit a fuller graph only if a real need appears.
+
+## Implementation status
+
+- [ ] 1. `Settings` aggregation (additive; typed fields become views over it)
+- [ ] 2. `BuildContext` with `Sources`/`Objects`/`Image`/`Settings` slots
+- [ ] 3. `gcc:compile` / `gcc:link` steps; built-in default pipeline
+- [ ] 4. objcopy/disassembly/size as pipeline steps
+- [ ] 5. `run`/`qemu`/`renode` steps; retire top-level `test-runner`
+- [ ] 6. drop typed gcc fields from the schema; `migrate` emits `settings`+`pipeline`
