@@ -16,6 +16,9 @@ public partial class MigrateCommand : LoggingCommand
     [Option("--force", "-f", Description = "Overwrite existing component.yaml/target.yaml")]
     public bool Force { get; set; }
 
+    [Option("--delete-make", Description = "Delete each Include.mk that migrated with nothing left unhandled")]
+    public bool DeleteMake { get; set; }
+
     public Task<int> ExecuteAsync(CancellationToken cancellationToken)
     {
         var root = Path.GetFullPath(Directory == "" ? System.IO.Directory.GetCurrentDirectory() : Directory);
@@ -36,12 +39,23 @@ public partial class MigrateCommand : LoggingCommand
             return Task.FromResult(1);
         }
 
-        int written = 0, skipped = 0, manual = 0;
+        int written = 0, skipped = 0, manual = 0, deleted = 0;
 
         foreach (var targetRoot in targetRoots)
         {
             foreach (var mk in System.IO.Directory.EnumerateFiles(targetRoot, MakeImport.FileName, SearchOption.AllDirectories))
             {
+                // Delete this Include.mk if requested and nothing was left unhandled.
+                void DeleteIfClean(IReadOnlyList<string> leftover)
+                {
+                    if (DeleteMake && !DryRun && leftover.Count == 0)
+                    {
+                        File.Delete(mk);
+                        deleted++;
+                        Logger.LogInformation("DELETE  {File}", Rel(root, mk));
+                    }
+                }
+
                 var dir = Path.GetDirectoryName(mk)!;
                 var rel = Path.GetRelativePath(targetRoot, dir).Replace('\\', '/');
                 var parts = rel.Split('/');
@@ -70,6 +84,7 @@ public partial class MigrateCommand : LoggingCommand
                         foreach (var l in leftover.Take(4))
                             Logger.LogWarning("            {Line}", l);
                     }
+                    DeleteIfClean(leftover);
                     continue;
                 }
 
@@ -77,6 +92,7 @@ public partial class MigrateCommand : LoggingCommand
                 {
                     skipped++;
                     Logger.LogInformation("SKIP    {File} (exists; use --force)", Rel(root, yamlPath));
+                    DeleteIfClean(leftover);
                     continue;
                 }
 
@@ -100,12 +116,14 @@ public partial class MigrateCommand : LoggingCommand
                     Logger.LogWarning("            ^ also has non-declarative Make (needs steps): {Lines}",
                         string.Join(" | ", leftover.Take(3)));
                 }
+                DeleteIfClean(leftover);
             }
         }
 
         Logger.LogInformation("");
-        Logger.LogInformation("Migrated {Written} file(s), skipped {Skipped}, {Manual} needing manual attention.{Dry}",
-            written, skipped, manual, DryRun ? " (dry run - nothing written)" : "");
+        Logger.LogInformation(
+            "Migrated {Written} file(s), skipped {Skipped}, deleted {Deleted} Include.mk, {Manual} needing manual attention.{Dry}",
+            written, skipped, deleted, manual, DryRun ? " (dry run - nothing written)" : "");
         return Task.FromResult(0);
     }
 
@@ -125,6 +143,11 @@ public partial class MigrateCommand : LoggingCommand
                 continue;
             if (AssignmentRegex().IsMatch(trimmed) || trimmed.StartsWith(".PHONY"))
                 continue;
+            // objcopy rules/recipes/aliases are imported as shell steps.
+            if (trimmed.Contains("$(OBJCOPY)")
+                || ObjcopyRuleRegex().IsMatch(trimmed)
+                || ObjcopyAliasRegex().IsMatch(trimmed))
+                continue;
             result.Add(line.Trim());
         }
         return result;
@@ -137,4 +160,10 @@ public partial class MigrateCommand : LoggingCommand
 
     [GeneratedRegex(@"^\w[\w]*\s*[?:+]?=")]
     private static partial Regex AssignmentRegex();
+
+    [GeneratedRegex(@"^\$\(OUTPUT\)\.\w+\s*:")]
+    private static partial Regex ObjcopyRuleRegex();
+
+    [GeneratedRegex(@"^(binary|ihex|srec)\s*:")]
+    private static partial Regex ObjcopyAliasRegex();
 }

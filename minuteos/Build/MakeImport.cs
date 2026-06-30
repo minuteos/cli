@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using MinuteOS.Cli.Build.Steps;
 
 namespace MinuteOS.Cli.Build;
 
@@ -13,7 +14,7 @@ namespace MinuteOS.Cli.Build;
 ///
 /// When every Include.mk has been migrated to YAML, this class can be deleted.
 /// </summary>
-public static class MakeImport
+public static partial class MakeImport
 {
     public const string FileName = "Include.mk";
 
@@ -90,10 +91,14 @@ public static class MakeImport
 
         meta.TestRunner = ImportTestRunner(content);
 
+        var steps = ImportObjcopySteps(content);
+        if (steps.Count > 0) meta.Steps = steps;
+
         var hasContent = meta.Requires != null || meta.Components != null ||
             meta.ToolchainPrefix != null || meta.PrimaryExt != null ||
             meta.LdScript != null || meta.ArchFlags != null || meta.LinkFlags != null ||
-            meta.LinkDirs != null || meta.Defines != null || meta.TestRunner != null;
+            meta.LinkDirs != null || meta.Defines != null || meta.TestRunner != null ||
+            meta.Steps != null;
         return hasContent ? meta : null;
     }
 
@@ -131,6 +136,36 @@ public static class MakeImport
         }
 
         return new TestRunnerConfig { Command = tokens[0], Args = args };
+    }
+
+    // Matches the common objcopy output rule + recipe, e.g.
+    //   $(OUTPUT).bin: $(PRIMARY_OUTPUT)
+    //       $(OBJCOPY) -O binary $< $@
+    [GeneratedRegex(@"\$\(OUTPUT\)\.(\S+)\s*:[^\n]*\n\s+\$\(OBJCOPY\)([^\n]+)", RegexOptions.Multiline)]
+    private static partial Regex ObjcopyRuleRegex();
+
+    /// <summary>
+    /// Converts objcopy conversion rules into PostBuild shell steps, e.g.
+    /// the cortex-m binary/ihex/srec outputs.
+    /// </summary>
+    private static List<StepReference> ImportObjcopySteps(string content)
+    {
+        var steps = new List<StepReference>();
+        foreach (Match m in ObjcopyRuleRegex().Matches(content))
+        {
+            var ext = m.Groups[1].Value.Trim();
+            var recipeArgs = m.Groups[2].Value.Trim()
+                .Replace("$<", "{output}")
+                .Replace("$@", "{output-base}." + ext);
+
+            steps.Add(new StepReference
+            {
+                Name = "shell",
+                Phase = BuildPhase.PostBuild,
+                Config = new Dictionary<string, string> { ["command"] = "{objcopy} " + recipeArgs },
+            });
+        }
+        return steps;
     }
 
     // A value is "static" if it has no unresolved Make variable reference.

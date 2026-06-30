@@ -172,6 +172,19 @@ public class Toolchain
         CancellationToken cancellationToken)
         => RunAsync(program, arguments, workingDirectory, cancellationToken);
 
+    /// <summary>
+    /// Runs a command line through the system shell (so make-style recipes with
+    /// pipes/redirects work). Used by the generic shell build step.
+    /// </summary>
+    public Task<CompilationResult> RunShellAsync(
+        string command,
+        string workingDirectory,
+        CancellationToken cancellationToken)
+    {
+        var (shell, flag) = OperatingSystem.IsWindows() ? ("cmd.exe", "/c") : ("/bin/sh", "-c");
+        return RunAsync(shell, [flag, command], workingDirectory, cancellationToken);
+    }
+
     private async Task<CompilationResult> RunAsync(
         string program,
         IEnumerable<string> arguments,

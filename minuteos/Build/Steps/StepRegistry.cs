@@ -32,6 +32,7 @@ public class StepRegistry
         registry.Register(new DisassemblyStep());
         registry.Register(new BinaryOutputStep());
         registry.Register(new SizeReportStep());
+        registry.Register(new ShellStep());
         return registry;
     }
 }

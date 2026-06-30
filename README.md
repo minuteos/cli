@@ -191,15 +191,18 @@ Directory precedence is most-specific-first, so a target-specific header (e.g.
 
 `minuteos migrate` converts a project or lib's `Include.mk` files into native
 `component.yaml` / `target.yaml`, so Make can be removed entirely. It writes one
-YAML file per `Include.mk` and flags any non-declarative content (custom rules
-like `objcopy`-based `binary`/`ihex`/`srec` outputs, bootloader sub-builds) that
-needs a [build step](#build-steps) instead. Use `-n`/`--dry-run` to preview.
+YAML file per `Include.mk`, converts `objcopy`-based `binary`/`ihex`/`srec` rules
+into [`shell` steps](#the-shell-step), and flags anything genuinely
+non-declarative (recursive bootloader builds, `run` targets) for manual porting.
+Use `-n`/`--dry-run` to preview, and `--delete-make` to remove each `Include.mk`
+that migrated with nothing left unhandled.
 
-The real `minuteos/lib` + `lib-arm` migrate cleanly: after running `migrate` and
-deleting every `Include.mk`, `minuteos test` still passes the full suite on both
-host (67/67) and ARM/qemu (68/68), driven purely by the generated YAML. The
-single piece of Make parsing lives in one class (`MakeImport`) that can be
-deleted once migration is complete.
+Running `minuteos migrate --delete-make` on the real `minuteos/lib` + `lib-arm`
+auto-converts and deletes 9 of the 12 `Include.mk` files; the 3 it keeps are the
+two `run` targets and the recursive bootloader build. The result builds and tests
+purely from YAML (plus the generated shell steps) on both host (67/67) and
+ARM/qemu (68/68). The only Make-parsing code lives in one class (`MakeImport`) to
+be deleted once migration is complete.
 
 ## Build Steps
 
@@ -219,6 +222,26 @@ Steps run at specific phases of the build pipeline:
 | `size-report` | PostBuild | Print binary size via `size` tool |
 | `disassembly` | PostBuild | Generate `.S` and `.SS` disassembly files |
 | `binary-output` | PostBuild | Convert ELF to bin/hex/srec via `objcopy` |
+| `shell` | PostBuild | Run an arbitrary command line (see below) |
+
+### The `shell` step
+
+`shell` is the generic escape hatch: it runs a command line through the system
+shell, so any Make recipe can be expressed declaratively. Placeholders are
+substituted before running:
+
+```yaml
+steps:
+  - name: shell
+    phase: PostBuild
+    config:
+      command: "{objcopy} -O binary {output} {output-base}.bin"
+```
+
+`{output}` is the primary output, `{output-base}` is it without extension,
+`{output-dir}` the output directory, `{name}` the output name, and `{objcopy}`
+`{objdump}` `{size}` `{cc}` `{cxx}` are the (prefixed) toolchain programs. This is
+what `migrate` emits for `objcopy`-based Make rules.
 
 ## Testing
 
