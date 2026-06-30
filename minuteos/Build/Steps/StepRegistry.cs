@@ -35,6 +35,7 @@ public class StepRegistry
         registry.Register(new ShellStep());
         registry.Register(new SubBuildStep());
         registry.Register(new TransformStep());
+        registry.Register(new TranspileStep());
         return registry;
     }
 }

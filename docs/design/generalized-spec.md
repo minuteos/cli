@@ -79,11 +79,15 @@ the mechanism for source generation (next section).
 
 ## Source generation & transforms (first-class)
 
-> **Status: implemented** (`transform` step in `minuteos/Build/Steps/TransformStep.cs`,
-> `BuildState.ExtraIncludeDirs`, covered by `minuteos.tests/TransformStepTests.cs`).
-> It works today on the current phase-based runner as a `PreBuild` step and
-> carries forward unchanged onto the pipeline model below — a transform is just an
-> early step that mutates the source set.
+> **Status: implemented.** Two flavors share one machinery
+> (`minuteos/Build/Steps/TransformSupport.cs`, `BuildState.ExtraIncludeDirs`):
+> the in-process `transpile` step (`TranspileStep` / `InProcessTransformStep`,
+> **the transpiler's integration point**, stubbed for now) and the generic
+> external-tool `transform` step (`TransformStep`, a language-agnostic escape
+> hatch). Covered by `TranspileStepTests` + `TransformStepTests`. Both run today
+> on the phase-based runner as `PreBuild` steps and carry forward unchanged onto
+> the pipeline model below — a transform is just an early step that mutates the
+> source set.
 
 Generating sources is a core requirement, not an add-on — e.g. a C#→C++
 transpiler. A **transform step** runs before `gcc:compile`, consumes input files
@@ -97,58 +101,55 @@ pipeline:
   - gcc:link
 ```
 
-A transform step:
+Any transform step:
 
 1. **Discovers its inputs** from the build's source directories (the context
    exposes `SourceDirs`), by extension/glob it owns (e.g. `*.cs`). The core's
    discovery of `Sources` stays compiler-input-only (`.c/.cpp/.S`); other input
    kinds belong to the step that handles them.
 2. **Generates** into a dedicated dir under the output tree
-   (`context.GeneratedDir`), invoking its tool.
+   (`out/<cfg>/generated/<id>`).
 3. **Registers outputs**: adds the generated `*.cpp` to the `Sources` slot and
    the generated include dir to the `include-dirs` setting, so downstream steps
    pick them up with no special casing.
-4. **Is incremental**: regenerates only when an input is newer than its output;
-   the generated `.cpp` then flows through the normal `.d`-based compile caching.
+4. **Is incremental**: the generated `.cpp` flows through the normal `.d`-based
+   compile cache; the generator only rewrites outputs whose content changed, so a
+   no-op build recompiles nothing.
 
-### How the transpiler plugs in
+### How the transpiler plugs in (in-process build step)
 
-The transpiler is a separate program (`minuteos/cs-transpiler`). It plugs in as a
-`transform` step that invokes it as an external tool with a small I/O contract
-(inputs in, output dir out, a manifest of produced files back) — the same loose
-coupling as the `shell` step, just with output registration. Wiring it into a
-project is one step entry today:
+The transpiler runs **inside the builder as a build step**, not as an external
+CLI. It is a .NET `IBuildStep` (`TranspileStep : InProcessTransformStep`); the
+real translation logic will replace the stub's `GenerateAsync`. Wiring it into a
+project is one step entry — no command, no manifest plumbing:
 
 ```yaml
 # a config (or component / target) that uses the transpiler
 steps:
-  - name: transform
+  - name: transpile
     phase: PreBuild        # becomes an early pipeline slot under the pipeline model
     config:
-      id: cs               # names the generated subdir: out/<cfg>/generated/cs
-      inputs: "**/*.cs"    # glob(s), matched across every source dir
-      command: cs-transpiler {inputs} -o {generated-dir} --manifest {manifest}
+      id: cs               # names the generated subdir: out/<cfg>/generated/cs (default)
+      inputs: "**/*.cs"    # overridable; default is **/*.cs
 ```
 
-**The I/O contract the tool must honor:**
-- It receives the matched input files (`{inputs}`), an output directory
-  (`{generated-dir}`), and a manifest path (`{manifest}`) — placeholders the step
-  substitutes; arrange them however the tool's CLI wants.
-- It writes its produced files into the output directory and lists them in the
-  manifest: a JSON array of paths, or `{"outputs": [...]}`; paths may be absolute
-  or relative to the output dir.
-- The step then registers any `.c/.cpp/.cc/.cxx/.S` from the manifest as sources
-  to compile and puts the output dir (plus any dir containing a generated header)
-  on the include path. Generated `.cpp` then flows through the normal `.d`-based
-  incremental compile cache.
-- **Incrementality:** the step re-invokes the tool only when an input is newer
-  than the last manifest, so a no-op build skips the tool entirely. (Whole-project
-  codegen is supported — the manifest is the source of truth for outputs — but a
-  predictable per-file mapping gives the tightest rebuilds.)
+**Contract between the builder and the in-process transpiler:**
+- The step hands the transpiler the **complete** set of discovered inputs every
+  build — a whole-program transpiler needs all files for cross-unit context.
+- **Dependency analysis is the transpiler's job**, not the builder's. There is no
+  input-mtime gate in the step; the transpiler decides what changed and reports
+  back its **complete** current output set. To keep the downstream compile cache
+  effective it should rewrite only the outputs whose content changed (the stub's
+  `WriteIfChanged` helper does exactly this), leaving unchanged units' timestamps
+  intact.
+- The base registers any returned `.c/.cpp/.cc/.cxx/.S` as sources to compile and
+  puts the generated dir (plus any dir containing a generated header) on the
+  include path.
 
-(An in-process plugin-step variant — loading the transpiler as an assembly — is
-possible later for speed, but the external-tool contract is the primary, simplest
-path and keeps the builder language-agnostic.)
+The generic external-tool **`transform`** step remains as a language-agnostic
+escape hatch for non-.NET generators (it keeps the inputs/output-dir/manifest CLI
+contract and an input-mtime incremental gate); the in-process `transpile` step is
+the preferred, tighter integration for the C#→C++ transpiler.
 
 ## GCC as steps
 
@@ -249,6 +250,8 @@ verifiable:
 - [ ] 4. objcopy/disassembly/size as pipeline steps
 - [ ] 5. `run`/`qemu`/`renode` steps; retire top-level `test-runner`
 - [ ] 6. drop typed gcc fields from the schema; `migrate` emits `settings`+`pipeline`
-- [x] **Source generation / transforms** — `transform` step, mutable source set,
-  generated-header include dirs, manifest contract, incremental (delivered ahead
-  of the pipeline refactor since the transpiler needs it now)
+- [x] **Source generation / transforms** — in-process `transpile` step (the
+  transpiler's integration point, stubbed) + generic external `transform` step,
+  shared via `TransformSupport`; mutable source set, generated-header include
+  dirs, incremental (delivered ahead of the pipeline refactor since the
+  transpiler needs it now)
