@@ -69,7 +69,7 @@ public class BuildCommand : LoggingCommand
             bool built;
             if (Graph)
             {
-                built = await Build.Graph.GraphRunner.BuildAsync(config, toolchain, Logger, cancellationToken);
+                built = await Build.Graph.GraphRunner.BuildAsync(config, toolchain, Logger, cancellationToken, parallelism);
             }
             else
             {

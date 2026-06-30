@@ -12,11 +12,13 @@ public sealed class BuildEngine
 {
     private readonly Toolchain _toolchain;
     private readonly ILogger _logger;
+    private readonly int _parallelism;
 
-    public BuildEngine(Toolchain toolchain, ILogger logger)
+    public BuildEngine(Toolchain toolchain, ILogger logger, int parallelism = 0)
     {
         _toolchain = toolchain;
         _logger = logger;
+        _parallelism = parallelism > 0 ? parallelism : Environment.ProcessorCount;
     }
 
     public async Task<bool> RunAsync(
@@ -67,42 +69,8 @@ public sealed class BuildEngine
                 CancellationToken = cancellationToken,
             };
 
-            foreach (var action in actions)
-            {
-                seen.Add(action.Label);
-
-                if (!action.AlwaysRun && cache.IsUpToDate(action, action.ConfigKey))
-                {
-                    // Skipped but its outputs exist - publish them for downstream steps.
-                    pool.AddRange(action.Outputs);
-                    continue;
-                }
-
-                foreach (var output in action.Outputs)
-                    EnsureDirectory(output.Id);
-
-                ActionResult result;
-                try
-                {
-                    result = await action.Run(actionContext);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError("Action '{Label}' threw: {Message}", action.Label, ex.Message);
-                    return false;
-                }
-
-                if (!result.Success)
-                {
-                    _logger.LogError("Action '{Label}' failed: {Message}", action.Label, result.Message);
-                    return false;
-                }
-
-                cache.Record(action, result, action.ConfigKey);
-
-                // Dynamic outputs (e.g. a transpiler) override the declared set.
-                pool.AddRange(result.ProducedArtifacts ?? action.Outputs);
-            }
+            if (!await RunStepActionsAsync(actions, pool, cache, seen, actionContext))
+                return false;
         }
 
         // Drop vanished actions, delete their orphaned outputs, persist the cache.
@@ -115,6 +83,90 @@ public sealed class BuildEngine
         cache.Save();
 
         return true;
+    }
+
+    /// <summary>
+    /// Runs a step's actions in dependency waves: actions whose intra-step inputs
+    /// are all satisfied run together, capped at the parallelism limit. This keeps
+    /// ordering (e.g. PCH before the compiles that -include it) while running the
+    /// independent compiles concurrently. Cache checks and pool/cache mutation
+    /// happen single-threaded between waves; only the action Run bodies run in
+    /// parallel, so no shared state is touched concurrently.
+    /// </summary>
+    private async Task<bool> RunStepActionsAsync(
+        List<BuildAction> actions, List<Artifact> pool, BuildCache cache,
+        HashSet<string> seen, ActionContext actionContext)
+    {
+        // Intra-step producer map: which action in this step produces each artifact.
+        var producedHere = new Dictionary<string, BuildAction>(StringComparer.Ordinal);
+        foreach (var a in actions)
+            foreach (var o in a.Outputs)
+                producedHere[o.Id] = a;
+
+        var pending = new List<BuildAction>(actions);
+        var done = new HashSet<BuildAction>();
+
+        while (pending.Count > 0)
+        {
+            // Ready = actions whose intra-step dependencies are all done.
+            var ready = pending.Where(a => a.Inputs.All(i =>
+                !producedHere.TryGetValue(i.Id, out var dep) || done.Contains(dep))).ToList();
+
+            if (ready.Count == 0)
+                throw new InvalidOperationException("Cycle among a step's actions.");
+
+            // Cache check (single-threaded); collect the ones that actually run.
+            var toRun = new List<BuildAction>();
+            foreach (var action in ready)
+            {
+                seen.Add(action.Label);
+                if (!action.AlwaysRun && cache.IsUpToDate(action, action.ConfigKey))
+                {
+                    pool.AddRange(action.Outputs);
+                    continue;
+                }
+                foreach (var output in action.Outputs)
+                    EnsureDirectory(output.Id);
+                toRun.Add(action);
+            }
+
+            // Run this wave concurrently (only the Run bodies; cap concurrency).
+            using var gate = new SemaphoreSlim(_parallelism);
+            var results = await Task.WhenAll(toRun.Select(async action =>
+            {
+                await gate.WaitAsync(actionContext.CancellationToken);
+                try { return (action, result: await SafeRun(action, actionContext)); }
+                finally { gate.Release(); }
+            }));
+
+            // Apply results (single-threaded): fail fast, record, publish.
+            foreach (var (action, result) in results)
+            {
+                if (result == null || !result.Success)
+                {
+                    _logger.LogError("Action '{Label}' failed: {Message}", action.Label, result?.Message ?? "threw");
+                    return false;
+                }
+                cache.Record(action, result, action.ConfigKey);
+                pool.AddRange(result.ProducedArtifacts ?? action.Outputs);
+            }
+
+            foreach (var a in ready)
+                done.Add(a);
+            pending.RemoveAll(done.Contains);
+        }
+
+        return true;
+    }
+
+    private async Task<ActionResult?> SafeRun(BuildAction action, ActionContext ctx)
+    {
+        try { return await action.Run(ctx); }
+        catch (Exception ex)
+        {
+            _logger.LogError("Action '{Label}' threw: {Message}", action.Label, ex.Message);
+            return null;
+        }
     }
 
     /// <summary>
