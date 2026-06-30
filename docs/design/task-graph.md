@@ -3,15 +3,25 @@
 Status: **stage 1 implemented** (supersedes the fixed-slot model in
 `generalized-spec.md`).
 
-> **Implementation progress.** Stage 1 (engine + frozen contract + native gcc
-> bundle: `scan`→`compile`→`link`, sequential, per-action up-to-date check) is
-> built under `minuteos/Build/Graph/` and reachable via `minuteos build --graph`.
-> Validated **byte-identical** toolchain command lines vs the legacy runner on the
-> host+ARM/qemu anchor; binaries run; no-op rebuilds do zero work. Remaining:
-> port `objcopy`/`transpile`/`transform`/`sub-build`/`git-version`/`disassembly`/
-> `size` onto the contract, the settings-ambient augmenter ordering, the
-> fingerprint cache + orphan cleanup, the parallel scheduler, then retire the
-> legacy `BuildRunner`.
+> **Implementation progress.** Built under `minuteos/Build/Graph/`, reachable via
+> `minuteos build --graph`. Done and validated (byte-identical toolchain command
+> lines vs the legacy runner on the host+ARM/qemu anchor; binaries run):
+> - engine + frozen contract (Artifact/Selector/IGraphStep/BuildAction);
+> - native gcc bundle: `scan`/`compile`(+PCH)/`link`/`objcopy`, plus
+>   `disassembly`/`size`;
+> - `transpile` (in-process, dynamic outputs + lazy fan-out), `transform`
+>   (external, manifest), `sub-build` (nested graph → blob object);
+> - fingerprint cache + orphan cleanup (uniform skip, removed-input relink,
+>   config-change detection);
+> - parallel wave scheduler.
+>
+> **Remaining (each a decision, not mechanical):**
+> 1. `git-version` as a **settings augmenter** — needs the settings-ambient
+>    two-phase (run augmenters, merge into a working bag, then plan/run readers),
+>    which is the one change to the engine's single-pass execution model.
+> 2. **The flip** — make `--graph` the default, route `run`/`test` through it, and
+>    retire the legacy `BuildRunner`. A go/no-go that wants real-lib revalidation
+>    (the `lib`/`lib-arm` repos aren't in this environment).
 
 ## Why
 
