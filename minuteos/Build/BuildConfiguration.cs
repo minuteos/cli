@@ -298,7 +298,7 @@ public class BuildConfiguration
         // Aggregate the toolchain-agnostic settings bag. The typed fields fold in
         // first (a deprecated alias), then explicit `settings:` maps are merged on
         // top - so settings is the single source of truth for the steps.
-        var settings = new Settings();
+        var settings = new Settings.Builder();
         settings.Add("defines", defines);
         settings.Add("include-dirs", includeDirs);
         settings.Add("gcc.arch-flags", resolvedArchFlags);
@@ -377,7 +377,7 @@ public class BuildConfiguration
             PrimaryExt = resolvedPrimaryExt,
             LdScript = ldScriptPath,
             LinkDirs = targetLinkDirs,
-            Settings = settings,
+            Settings = settings.Build(),
             TestRunner = resolvedTestRunner,
             OutputNameOverride = overrides?.OutputName,
             OutputSubdir = overrides?.OutputSubdir,
@@ -389,7 +389,7 @@ public class BuildConfiguration
     /// Settings bag, appending so list keys accumulate and scalar keys resolve to
     /// the most-specific (last-merged) value.
     /// </summary>
-    private static void MergeSettings(Settings settings, Dictionary<string, object> map)
+    private static void MergeSettings(Settings.Builder settings, Dictionary<string, object> map)
     {
         foreach (var (key, value) in map)
             settings.Add(key, NormalizeSettingValue(value));

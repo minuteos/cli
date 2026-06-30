@@ -41,12 +41,17 @@ public sealed class BuildEngine
         };
 
         // Settings is an ambient artifact: augmenter steps (those producing
-        // kind=settings, e.g. git-version) run first and merge into a working copy
-        // of the bag, so every reader's Plan sees the fully-merged settings.
-        var settings = config.Settings.Clone();
+        // kind=settings, e.g. git-version) run first; each yields a new bag with
+        // their additions merged, so every reader's Plan sees the fully-merged
+        // settings. The bag stays immutable - safe to share across parallel actions.
+        var settings = config.Settings;
         foreach (var augmenter in ordered.Where(IsAugmenter))
-            if (!await RunAugmenterAsync(augmenter, config, settings, seen, actionContext))
+        {
+            var augmented = await RunAugmenterAsync(augmenter, config, settings, seen, actionContext);
+            if (augmented == null)
                 return false;
+            settings = augmented;
+        }
 
         // The artifact pool grows as steps run; each step consumes what matches its
         // selectors and contributes its outputs (lazy fan-out - Plan runs only once
@@ -176,7 +181,7 @@ public sealed class BuildEngine
     /// into the working bag. Augmenters always run (their contribution, e.g. a git
     /// hash, can change every build) and don't participate in the artifact pool.
     /// </summary>
-    private async Task<bool> RunAugmenterAsync(
+    private async Task<Settings?> RunAugmenterAsync(
         IGraphStep step, BuildConfiguration config, Settings working, HashSet<string> seen, ActionContext actionContext)
     {
         var planContext = new PlanContext
@@ -193,7 +198,7 @@ public sealed class BuildEngine
         catch (Exception ex)
         {
             _logger.LogError("Augmenter '{Step}' failed to plan: {Message}", step.Name, ex.Message);
-            return false;
+            return null;
         }
 
         foreach (var action in actions)
@@ -203,13 +208,12 @@ public sealed class BuildEngine
             if (result == null || !result.Success)
             {
                 _logger.LogError("Augmenter '{Label}' failed: {Message}", action.Label, result?.Message ?? "threw");
-                return false;
+                return null;
             }
             if (result.SettingsAdditions != null)
-                foreach (var (key, values) in result.SettingsAdditions)
-                    working.Add(key, values);
+                working = working.With(result.SettingsAdditions);
         }
-        return true;
+        return working;
     }
 
     private async Task<ActionResult?> SafeRun(BuildAction action, ActionContext ctx)
