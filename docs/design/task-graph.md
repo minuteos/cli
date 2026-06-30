@@ -20,12 +20,17 @@ Status: **implemented and default** (supersedes the fixed-slot model in
 > and **the flip** — the graph is the default engine for `build`/`run`/`test` and
 > the legacy `BuildRunner` + all `IBuildStep` steps are deleted.
 >
-> **Remaining:**
-> - **Real-lib revalidation** — re-run `migrate` + build/test against the actual
->   `lib`/`lib-arm` (not in this environment); validated here on the anchor and
->   the cortex-m3 example.
-> - Optional polish: sub-build incrementality (currently `AlwaysRun`), cross-step
->   parallelism (today only intra-step), content-hash fingerprints.
+> **Real-lib validated:** against the actual Make-based `minuteos/lib` +
+> `lib-arm`, `migrate` converts 11/12 `Include.mk` (the recursive bootloader is
+> the documented manual case), then `minuteos test` through the graph passes
+> **host 67/67** and **qemu/ARM 68/68** — matching the pre-graph baseline. (This
+> surfaced and fixed one real bug: relative `gcc.link-dirs` from a migrated
+> target weren't resolved against the target dir.)
+>
+> **Remaining (optional polish only):** sub-build incrementality (currently
+> `AlwaysRun`), cross-step parallelism (today only intra-step), content-hash
+> fingerprints, and porting the recursive-bootloader manual case to a project
+> `sub-build` (as done previously by hand).
 
 ## Why
 
