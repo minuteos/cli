@@ -286,12 +286,28 @@ in these stages.
    not toolchain). Defines/includes likewise stay structural in the bag.
 7. **No compatibility shim.** Convert all ~12 steps to the new contract in one
    move — this is a prototype; a half-migrated engine is harder to reason about.
+8. **Settings is an ambient artifact; steps may augment it.** Structural
+   resolution emits the base `settings`; a few steps *augment* it (e.g.
+   `git-version` adds `APP_VERSION` defines), the rest *read* it. The engine
+   orders **all augmenters before any reader**, so a reader's `Plan()` sees the
+   fully merged bag — no per-step wiring, and it matches "git-version writes into
+   the bag." Consequence (accepted): defines are global `-D`s, so a settings
+   change is in every compile action's fingerprint → a version bump triggers a
+   full rebuild (same as changing `CFLAGS` in make). If that ever bites, the
+   refinement is to have such steps emit a generated *header* one TU includes,
+   instead of a global define — not now.
 
-## Still open
+## Proposed (pending sign-off)
 
-- Cache file format/layout under `out/<config>/.cache`.
-- Exact `Settings` keys a `scan` step reads for its source dirs (reuse the
-  existing `source-dirs`/`include-dirs` aggregation).
-- Whether `git-version`-style steps that contribute *defines* (not files) do so by
-  producing a value-artifact the compile reads, or by writing into the settings
-  bag before the graph runs.
+- **Cache** — one inspectable JSON per config: `out/<config>/.cache/actions.json`,
+  mapping a stable action key (`step name + primary output path`) →
+  `{ inputs: {path: fingerprint}, deps: [discovered paths], outputs: [produced
+  paths], config: fingerprint }`. Fingerprints are opaque strings (mtime→hash swap
+  doesn't change the format); `outputs` drives orphan cleanup. Easy to delete; no
+  binary format.
+- **`scan` source dirs** — reuse the existing aggregation: structural resolution
+  exposes the source dir list in the bag as `source-dirs` (structural, like
+  `include-dirs`/`defines`). Each language `scan` step reads
+  `settings.List("source-dirs")` and claims its **own** extensions within them
+  (gcc: `.c/.cpp/.S`; cs: `.cs`), tagging outputs `kind=source, lang=…`.
+  Extensions partition across scans, so no file is double-claimed.
