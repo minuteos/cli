@@ -148,6 +148,11 @@ public partial class MigrateCommand : LoggingCommand
                 || ObjcopyRuleRegex().IsMatch(trimmed)
                 || ObjcopyAliasRegex().IsMatch(trimmed))
                 continue;
+            // `run` targets are covered by `minuteos run`.
+            if (RunTargetRegex().IsMatch(trimmed)
+                || trimmed.Contains("$(TEST_RUN)")
+                || RunRecipeRegex().IsMatch(trimmed))
+                continue;
             result.Add(line.Trim());
         }
         return result;
@@ -166,4 +171,11 @@ public partial class MigrateCommand : LoggingCommand
 
     [GeneratedRegex(@"^(binary|ihex|srec)\s*:")]
     private static partial Regex ObjcopyAliasRegex();
+
+    [GeneratedRegex(@"^run\s*:")]
+    private static partial Regex RunTargetRegex();
+
+    // A recipe that just launches the built binary, e.g. `@$(OUTPUT).elf`.
+    [GeneratedRegex(@"^@?\$\(OUTPUT\)\.\w+\s*$")]
+    private static partial Regex RunRecipeRegex();
 }

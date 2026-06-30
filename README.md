@@ -29,6 +29,7 @@ minuteos build
 |---------|-------------|
 | `minuteos new <name>` | Scaffold a new project with lib, src, and config |
 | `minuteos build [-c name]` | Build one or all configurations |
+| `minuteos run [-c name]` | Build a configuration and run its output (host, or via the emulator) |
 | `minuteos test [-c name]` | Build and run test suites |
 | `minuteos clean [-c name]` | Remove build artifacts |
 | `minuteos info [-c name]` | Show resolved build configuration |
@@ -198,11 +199,12 @@ Use `-n`/`--dry-run` to preview, and `--delete-make` to remove each `Include.mk`
 that migrated with nothing left unhandled.
 
 Running `minuteos migrate --delete-make` on the real `minuteos/lib` + `lib-arm`
-auto-converts and deletes 9 of the 12 `Include.mk` files; the 3 it keeps are the
-two `run` targets and the recursive bootloader build. The result builds and tests
-purely from YAML (plus the generated shell steps) on both host (67/67) and
-ARM/qemu (68/68). The only Make-parsing code lives in one class (`MakeImport`) to
-be deleted once migration is complete.
+auto-converts and deletes 11 of the 12 `Include.mk` files. The one it keeps is the
+recursive bootloader sub-build (which builds a second binary and links it as a
+blob — a planned build step). The result builds and tests purely from YAML (plus
+the generated shell steps) on both host (67/67) and ARM/qemu (68/68). The only
+Make-parsing code lives in one class (`MakeImport`) to be deleted once migration
+is complete.
 
 ## Build Steps
 
