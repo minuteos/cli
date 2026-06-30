@@ -46,9 +46,6 @@ public sealed class PlanContext
 
     /// <summary>The materialized artifacts matching this step's consume selectors.</summary>
     public required IReadOnlyList<Artifact> Inputs { get; init; }
-
-    /// <summary>Config from the step's reference in YAML (if any).</summary>
-    public IReadOnlyDictionary<string, string> StepConfig { get; init; } = new Dictionary<string, string>();
 }
 
 /// <summary>Context handed to a <see cref="BuildAction"/> when it runs.</summary>

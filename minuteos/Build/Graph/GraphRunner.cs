@@ -32,6 +32,18 @@ public static class GraphRunner
             new GccLinkStep(),
         };
 
+        // Map the project's configured steps to graph steps. Ordering is by
+        // artifact properties, so phases are ignored; Run-phase steps are
+        // out-of-graph (run/test invoke them). Not-yet-ported steps are skipped.
+        foreach (var stepRef in config.StepRefs)
+        {
+            var graphStep = MapConfiguredStep(stepRef);
+            if (graphStep != null)
+                steps.Add(graphStep);
+            else if (stepRef.Phase != MinuteOS.Cli.Build.Steps.BuildPhase.Run && !RunStepNames.Contains(stepRef.Name))
+                logger.LogWarning("Step '{Name}' is not yet ported to the graph engine; skipping.", stepRef.Name);
+        }
+
         var engine = new BuildEngine(toolchain, logger);
         var ok = await engine.RunAsync(steps, config, cancellationToken, quiet);
 
@@ -41,5 +53,21 @@ public static class GraphRunner
             logger.LogInformation("Build succeeded: {Output}", config.PrimaryOutput);
         }
         return ok;
+    }
+
+    private static readonly HashSet<string> RunStepNames =
+        new(StringComparer.OrdinalIgnoreCase) { "run", "qemu", "renode", "exec" };
+
+    /// <summary>Maps a configured step reference to a graph step, or null if N/A.</summary>
+    private static IGraphStep? MapConfiguredStep(StepReference stepRef)
+    {
+        var cfg = stepRef.Config ?? new Dictionary<string, string>();
+        return stepRef.Name.ToLowerInvariant() switch
+        {
+            "gcc:objcopy" or "binary-output" => new GccObjcopyStep(cfg),
+            "disassembly" => new DisassemblyStep(),
+            "size" or "size-report" => new SizeStep(),
+            _ => null,
+        };
     }
 }
