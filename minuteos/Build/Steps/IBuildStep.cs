@@ -62,6 +62,12 @@ public class StepContext
     /// PreBuild steps can add generated sources, extra defines, etc.
     /// </summary>
     public BuildState State { get; init; } = new();
+
+    /// <summary>Max parallel compilation jobs (used by the compile step).</summary>
+    public int Parallelism { get; init; } = 1;
+
+    /// <summary>When true, only warnings/errors are logged (per-suite test builds).</summary>
+    public bool Quiet { get; init; }
 }
 
 /// <summary>
@@ -95,6 +101,17 @@ public class BuildState
     /// Additional linker flags contributed by steps.
     /// </summary>
     public List<string> ExtraLinkFlags { get; } = [];
+
+    /// <summary>
+    /// Pipeline artifact slot: object files produced by the compile step and
+    /// consumed by the link step.
+    /// </summary>
+    public List<string> Objects { get; } = [];
+
+    /// <summary>
+    /// Pipeline artifact slot: the linked primary image, set by the link step.
+    /// </summary>
+    public string? Image { get; set; }
 }
 
 public record StepResult(bool Success, string? Message = null)

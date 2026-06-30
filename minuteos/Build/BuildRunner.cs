@@ -4,8 +4,15 @@ using MinuteOS.Cli.Build.Steps;
 namespace MinuteOS.Cli.Build;
 
 /// <summary>
-/// Orchestrates the full build pipeline:
-/// PreBuild steps -> Compile -> PreLink steps -> Link -> PostBuild steps
+/// Executes the build as an ordered pipeline of steps over a shared
+/// <see cref="BuildState"/>. The default pipeline is:
+///
+///   [PreBuild ext steps] -> gcc:compile -> [PreLink ext steps] -> gcc:link -> [PostBuild ext steps]
+///
+/// Compile and link are themselves steps (<see cref="GccCompileStep"/> /
+/// <see cref="GccLinkStep"/>) that read the toolchain-agnostic <see cref="Settings"/>
+/// bag - the core no longer knows about GCC. Extension steps contributed by
+/// components/targets/project slot in by their phase.
 /// </summary>
 public class BuildRunner
 {
@@ -22,7 +29,6 @@ public class BuildRunner
 
     public async Task<bool> BuildAsync(BuildConfiguration config, int parallelism, CancellationToken cancellationToken, bool quiet = false)
     {
-        // In quiet mode (per-suite test builds) only warnings/errors are logged.
         void Info(string message, params object[] args)
         {
             if (!quiet)
@@ -35,161 +41,59 @@ public class BuildRunner
         Info("Components:   {Components}", string.Join(", ", config.Components));
         Info("Sources:      {Count} files", config.Sources.Count);
         Info("Output:       {Output}", config.PrimaryOutput);
-
         if (config.StepRefs.Count > 0)
             Info("Steps:        {Steps}", string.Join(", ", config.StepRefs.Select(s => s.Name)));
-
         Info("");
 
-        // Resolve steps by phase
-        var stepsByPhase = ResolveSteps(config);
-
-        // Build state accumulates contributions from steps
         var state = new BuildState();
 
-        // === PreBuild phase ===
-        if (!await RunStepsAsync(BuildPhase.PreBuild, stepsByPhase, config, state, cancellationToken, quiet))
-            return false;
+        // Assemble the ordered pipeline: extension steps by phase, with the
+        // built-in gcc compile/link steps at their fixed positions.
+        var byPhase = ResolveSteps(config);
+        var pipeline = new List<(IBuildStep Step, StepReference? Ref)>();
+        pipeline.AddRange(byPhase.GetValueOrDefault(BuildPhase.PreBuild, []));
+        pipeline.Add((new GccCompileStep(), null));
+        pipeline.AddRange(byPhase.GetValueOrDefault(BuildPhase.PreLink, []));
+        pipeline.Add((new GccLinkStep(), null));
+        pipeline.AddRange(byPhase.GetValueOrDefault(BuildPhase.PostBuild, []));
 
-        // Merge step contributions (generated sources, include dirs, defines)
-        // into the configuration before the PCH and compile see them. The
-        // collections on BuildConfiguration are mutable lists, so contributions
-        // from PreBuild steps (e.g. a transpiler's generated .cpp + header dir)
-        // flow through the normal compile path with no special casing.
-        var allSources = new List<SourceFile>(config.Sources);
-        allSources.AddRange(state.GeneratedSources);
-
-        foreach (var dir in state.ExtraIncludeDirs)
-            if (!config.IncludeDirs.Contains(dir))
-                config.IncludeDirs.Add(dir);
-
-        foreach (var define in state.ExtraDefines)
-            if (!config.Defines.Contains(define))
-                config.Defines.Add(define);
-
-        if (allSources.Count == 0)
+        foreach (var (step, stepRef) in pipeline)
         {
-            _logger.LogWarning("No source files found.");
-            return false;
-        }
+            // Built-in gcc steps log their own progress; announce extension steps.
+            if (stepRef != null && !quiet)
+                _logger.LogInformation("  Running step: {Name}", step.Name);
 
-        // === Precompiled header ===
-        if (config.Pch != null)
-        {
-            Directory.CreateDirectory(config.ObjectDir);
-            if (NeedsRebuild(config.Pch, config.PchGchFile))
+            var context = new StepContext
             {
-                Info("  precompiling {Pch}", Path.GetFileName(config.Pch));
-                var pchResult = await _toolchain.CompilePchAsync(config, cancellationToken);
-                if (!string.IsNullOrWhiteSpace(pchResult.StdErr))
-                    _logger.LogWarning("{StdErr}", pchResult.StdErr.TrimEnd());
-                if (!pchResult.Success)
-                {
-                    _logger.LogError("Failed to compile precompiled header: exit code {ExitCode}", pchResult.ExitCode);
-                    return false;
-                }
-            }
-        }
+                Configuration = config,
+                Toolchain = _toolchain,
+                Logger = _logger,
+                StepConfig = stepRef?.Config ?? new(),
+                State = state,
+                Parallelism = parallelism,
+                Quiet = quiet,
+            };
 
-        // === Compile phase ===
-        Info("Compiling {Count} files...", allSources.Count);
-
-        var objectFiles = new List<string>();
-        var compileTasks = new List<(SourceFile Source, string ObjectPath)>();
-
-        foreach (var source in allSources)
-        {
-            var objPath = config.GetObjectPath(source);
-            compileTasks.Add((source, objPath));
-            objectFiles.Add(objPath);
-        }
-
-        var semaphore = new SemaphoreSlim(parallelism);
-        var errors = new List<string>();
-
-        var tasks = compileTasks.Select(async item =>
-        {
-            await semaphore.WaitAsync(cancellationToken);
-            try
+            var result = await step.ExecuteAsync(context, cancellationToken);
+            if (!result.Success)
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(item.ObjectPath)!);
-
-                if (!NeedsRebuild(item.Source.FullPath, item.ObjectPath))
-                {
-                    _logger.LogDebug("Skipping (up-to-date): {Source}", item.Source.RelativePath);
-                    return;
-                }
-
-                Info("  {Compiler} -c {Source}",
-                    item.Source.Language == SourceLanguage.C ? "gcc" : "g++",
-                    item.Source.RelativePath);
-
-                var result = await _toolchain.CompileAsync(item.Source, item.ObjectPath, config, cancellationToken);
-
-                if (!string.IsNullOrWhiteSpace(result.StdErr))
-                    _logger.LogWarning("{StdErr}", result.StdErr.TrimEnd());
-
-                if (!result.Success)
-                {
-                    lock (errors)
-                        errors.Add($"Failed to compile {item.Source.RelativePath}: exit code {result.ExitCode}");
-                }
+                if (result.Message != null)
+                    _logger.LogError("Step '{Name}' failed: {Message}", step.Name, result.Message);
+                return false;
             }
-            finally
-            {
-                semaphore.Release();
-            }
-        });
 
-        await Task.WhenAll(tasks);
-
-        if (errors.Count > 0)
-        {
-            foreach (var error in errors)
-                _logger.LogError("{Error}", error);
-            return false;
+            if (result.Message != null)
+                _logger.LogDebug("  {Message}", result.Message);
         }
-
-        // === PreLink phase ===
-        if (!await RunStepsAsync(BuildPhase.PreLink, stepsByPhase, config, state, cancellationToken, quiet))
-            return false;
-
-        // === Link phase ===
-        Info("");
-        Info("Linking...");
-
-        Directory.CreateDirectory(Path.GetDirectoryName(config.PrimaryOutput)!);
-
-        // Objects contributed by steps (e.g. a sub-build blob) - added here so
-        // PreLink steps can supply them.
-        objectFiles.AddRange(state.ExtraObjects);
-
-        var linkResult = await _toolchain.LinkAsync(
-            objectFiles, config.PrimaryOutput, config,
-            state.ExtraLinkFlags.Count > 0 ? state.ExtraLinkFlags : null,
-            cancellationToken);
-
-        if (!string.IsNullOrWhiteSpace(linkResult.StdErr))
-            _logger.LogWarning("{StdErr}", linkResult.StdErr.TrimEnd());
-
-        if (!linkResult.Success)
-        {
-            _logger.LogError("Linking failed with exit code {ExitCode}", linkResult.ExitCode);
-            return false;
-        }
-
-        // === PostBuild phase ===
-        if (!await RunStepsAsync(BuildPhase.PostBuild, stepsByPhase, config, state, cancellationToken, quiet))
-            return false;
 
         Info("");
         Info("Build succeeded: {Output}", config.PrimaryOutput);
         return true;
     }
 
-    private Dictionary<BuildPhase, List<(IBuildStep Step, StepReference Ref)>> ResolveSteps(BuildConfiguration config)
+    private Dictionary<BuildPhase, List<(IBuildStep Step, StepReference? Ref)>> ResolveSteps(BuildConfiguration config)
     {
-        var result = new Dictionary<BuildPhase, List<(IBuildStep, StepReference)>>();
+        var result = new Dictionary<BuildPhase, List<(IBuildStep, StepReference?)>>();
 
         foreach (var stepRef in config.StepRefs)
         {
@@ -202,89 +106,10 @@ public class BuildRunner
 
             var phase = stepRef.Phase ?? step.DefaultPhase;
             if (!result.TryGetValue(phase, out var list))
-            {
-                list = [];
-                result[phase] = list;
-            }
+                result[phase] = list = [];
             list.Add((step, stepRef));
         }
 
         return result;
-    }
-
-    private async Task<bool> RunStepsAsync(
-        BuildPhase phase,
-        Dictionary<BuildPhase, List<(IBuildStep Step, StepReference Ref)>> stepsByPhase,
-        BuildConfiguration config,
-        BuildState state,
-        CancellationToken cancellationToken,
-        bool quiet = false)
-    {
-        if (!stepsByPhase.TryGetValue(phase, out var steps) || steps.Count == 0)
-            return true;
-
-        if (!quiet)
-            _logger.LogInformation("[{Phase}]", phase);
-
-        foreach (var (step, stepRef) in steps)
-        {
-            if (!quiet)
-                _logger.LogInformation("  Running step: {Name}", step.Name);
-
-            var context = new StepContext
-            {
-                Configuration = config,
-                Toolchain = _toolchain,
-                Logger = _logger,
-                StepConfig = stepRef.Config ?? new(),
-                State = state,
-            };
-
-            var result = await step.ExecuteAsync(context, cancellationToken);
-            if (!result.Success)
-            {
-                _logger.LogError("Step '{Name}' failed: {Message}", step.Name, result.Message);
-                return false;
-            }
-
-            if (result.Message != null)
-                _logger.LogDebug("  {Message}", result.Message);
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    /// Checks if a source needs recompilation by comparing the object file's
-    /// mtime against all dependencies listed in the .d file (generated by -MMD).
-    /// Falls back to source-vs-object comparison if no .d file exists.
-    /// </summary>
-    private static bool NeedsRebuild(string sourcePath, string objectPath)
-    {
-        if (!File.Exists(objectPath))
-            return true;
-
-        var objectTime = File.GetLastWriteTimeUtc(objectPath);
-
-        // Try to use the .d dependency file for accurate header tracking
-        var depPath = DepFile.GetDepPath(objectPath);
-        var deps = DepFile.Parse(depPath);
-
-        if (deps != null)
-        {
-            foreach (var dep in deps)
-            {
-                if (!File.Exists(dep))
-                    return true; // dependency deleted, must rebuild
-
-                if (File.GetLastWriteTimeUtc(dep) > objectTime)
-                    return true;
-            }
-            return false;
-        }
-
-
-        // Fallback: no .d file yet (first build), compare source directly
-        return File.GetLastWriteTimeUtc(sourcePath) > objectTime;
     }
 }

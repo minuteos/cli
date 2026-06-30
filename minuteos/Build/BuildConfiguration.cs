@@ -307,6 +307,9 @@ public class BuildConfiguration
         settings.Add("gcc.arch-flags", resolvedArchFlags);
         settings.Add("gcc.c-flags", (profile.CFlags ?? []).Concat(componentCFlags));
         settings.Add("gcc.cxx-flags", (profile.CxxFlags ?? []).Concat(componentCxxFlags));
+        // Target link-flags (e.g. --specs/-nostartfiles) first, then profile +
+        // components. The bag is the single source of truth for the link step.
+        settings.Add("gcc.link-flags", targetLinkFlags);
         settings.Add("gcc.link-flags", (profile.LinkFlags ?? []).Concat(componentLinkFlags));
         settings.Add("gcc.link-dirs", targetLinkDirs);
         settings.Set("gcc.toolchain-prefix", resolvedToolchainPrefix);

@@ -245,9 +245,16 @@ verifiable:
 ## Implementation status
 
 - [x] 1. `Settings` aggregation (additive; typed fields become views over it)
-- [ ] 2. `BuildContext` with `Sources`/`Objects`/`Image`/`Settings` slots
-- [ ] 3. `gcc:compile` / `gcc:link` steps; built-in default pipeline
-- [ ] 4. objcopy/disassembly/size as pipeline steps
+- [x] 2. Pipeline artifact slots — `Sources`/`Objects`/`Image` on `BuildState`,
+  `Settings` on the config; `StepContext` gains `Parallelism`/`Quiet`
+- [x] 3. `GccCompileStep` (incl. PCH) / `GccLinkStep` read the `Settings` bag;
+  `BuildRunner` is now a pipeline executor with the built-in default pipeline
+  `[PreBuild ext, gcc:compile, PreLink ext, gcc:link, PostBuild ext]`. Validated
+  byte-identical to the pre-refactor toolchain command lines on host + ARM/qemu
+  (the one intended change: target `link-flags`, previously silently dropped, are
+  now applied). `Toolchain` is reduced to a process runner.
+- [~] 4. objcopy/disassembly/size already run as pipeline steps; remaining work is
+  promoting the migrated objcopy to a first-class `gcc:objcopy`
 - [ ] 5. `run`/`qemu`/`renode` steps; retire top-level `test-runner`
 - [ ] 6. drop typed gcc fields from the schema; `migrate` emits `settings`+`pipeline`
 - [x] **Source generation / transforms** — in-process `transpile` step (the
