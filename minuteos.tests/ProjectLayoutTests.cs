@@ -102,6 +102,43 @@ public class ProjectLayoutTests : IDisposable
     }
 
     [Fact]
+    public void ResolveTargetChain_IncludeMk_CapturesTargetSettings()
+    {
+        // Mirrors lib-arm/targets/cortex-m/Include.mk.
+        CreateDir("lib/targets/all");
+        CreateDir("lib/targets/cmsis");
+        WriteFile("lib/targets/cortex-m/Include.mk",
+            "TOOLCHAIN_PREFIX = arm-none-eabi-\n" +
+            "ARCH_FLAGS ?= -mthumb\n" +
+            "LD_SCRIPT ?= default.ld\n" +
+            "DEFINES += LINKER_ORDERED_SECTION=\\\".text.ord\\\"\n" +
+            "LINK_FLAGS += -T$(LD_SCRIPT) -nostartfiles -specs=nano.specs\n" +
+            "PRIMARY_EXT = .axf\n" +
+            "TARGETS += cmsis\n");
+
+        var layout = new ProjectLayout(_tempDir);
+        var chain = layout.ResolveTargetChain("cortex-m", out var meta);
+
+        Assert.Contains("cmsis", chain);  // TARGETS += parsed
+        var cm = meta["cortex-m"];
+        Assert.Equal("arm-none-eabi-", cm.ToolchainPrefix);
+        Assert.Equal(".axf", cm.PrimaryExt);
+        Assert.Equal("default.ld", cm.LdScript);
+        Assert.NotNull(cm.ArchFlags);
+        Assert.Contains("-mthumb", cm.ArchFlags);
+
+        // Define quotes are unescaped from Make form.
+        Assert.NotNull(cm.Defines);
+        Assert.Contains("LINKER_ORDERED_SECTION=\".text.ord\"", cm.Defines);
+
+        // LINK_FLAGS: static tokens kept, $(...) tokens dropped.
+        Assert.NotNull(cm.LinkFlags);
+        Assert.Contains("-nostartfiles", cm.LinkFlags);
+        Assert.Contains("-specs=nano.specs", cm.LinkFlags);
+        Assert.DoesNotContain(cm.LinkFlags, f => f.Contains("$("));
+    }
+
+    [Fact]
     public void ResolveTargetChain_UsesTargetYaml()
     {
         CreateDir("lib/targets/all");

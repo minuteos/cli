@@ -166,7 +166,16 @@ link-dirs:
 
 Target inheritance is resolved recursively. For example, `cortex-m4f` inherits from `cortex-m4`, which inherits from `cortex-m3`, which inherits from `cortex-m`.
 
-Falls back to parsing `Include.mk` (`TARGETS += cortex-m`) for backwards compatibility.
+When no `target.yaml` is present, the tool reads a legacy `Include.mk`, importing
+`TARGETS +=`, `COMPONENTS +=`, `TOOLCHAIN_PREFIX`, `ARCH_FLAGS`, `PRIMARY_EXT`,
+`LD_SCRIPT`, `LINK_FLAGS` (static tokens), `LINK_DIRS`, and `DEFINES +=`. Values
+that reference Make variables (`$(...)`) are skipped — the one common exception is
+`LINK_DIRS`/`$(<NAME>_DIR)`, which resolves to the target's own directory. This is
+enough to build the real `minuteos/lib` + `lib-arm` for host and ARM/qemu
+unmodified; only the test-runner needs to be declared in `minuteos.yaml`.
+
+Directory precedence is most-specific-first, so a target-specific header (e.g.
+`qemu-arm/cortex_defs.h`) overrides the generic one (`cortex-m/...`).
 
 ## Build Steps
 

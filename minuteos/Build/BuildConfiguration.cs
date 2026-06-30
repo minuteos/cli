@@ -96,32 +96,38 @@ public class BuildConfiguration
         // Test builds inject extra targets (e.g. "test") that provide hardware stubs.
         var targetNames = layout.ResolveTargetChain(
             primaryTarget, overrides?.ExtraTargets ?? [], out var targetMetadata);
-        var targetDirs = layout.ResolveTargetDirs(targetNames);
 
-        // Merge target metadata contributions (child targets override parents)
-        string? resolvedToolchainPrefix = profile.ToolchainPrefix;
-        List<string>? resolvedArchFlags = profile.ArchFlags;
-        string resolvedPrimaryExt = profile.PrimaryExt ?? ".elf";
-        string? resolvedLdScript = profile.LdScript;
+        // Directory precedence is most-specific-first (so a target-specific header
+        // like qemu-arm/cortex_defs.h overrides cortex-m's), with the shared "all"
+        // target last. targetNames is parents-first, so reverse all but "all".
+        var targetDirsOrder = targetNames.Where(t => t != "all").Reverse()
+            .Concat(targetNames.Where(t => t == "all")).ToList();
+        var targetDirs = layout.ResolveTargetDirs(targetDirsOrder);
+
+        // Merge target metadata contributions.
+        string? targetToolchainPrefix = null;
+        List<string>? targetArchFlags = null;
+        string? targetPrimaryExt = null;
+        string? targetLdScript = null;
         var targetDefines = new List<string>();
         var targetLinkFlags = new List<string>();
         var targetLinkDirs = new List<string>();
         var targetComponents = new List<string>();
         var stepRefs = new List<StepReference>();
 
-        // Process targets in dependency order (parents first, then children)
-        // Children override scalar values, lists accumulate
+        // targetNames are ordered parents-first, so iterating and keeping the
+        // last value gives the most-specific (child) target precedence for
+        // scalars; lists accumulate across the whole chain.
         foreach (var targetName in targetNames)
         {
             if (!targetMetadata.TryGetValue(targetName, out var tmeta))
                 continue;
 
-            // Scalars: later (child) targets override
-            resolvedToolchainPrefix ??= tmeta.ToolchainPrefix;
-            resolvedArchFlags ??= tmeta.ArchFlags;
-            if (tmeta.PrimaryExt != null)
-                resolvedPrimaryExt = tmeta.PrimaryExt;
-            resolvedLdScript ??= tmeta.LdScript;
+            // Scalars: most-specific (later) target wins
+            if (tmeta.ToolchainPrefix != null) targetToolchainPrefix = tmeta.ToolchainPrefix;
+            if (tmeta.ArchFlags != null) targetArchFlags = tmeta.ArchFlags;
+            if (tmeta.PrimaryExt != null) targetPrimaryExt = tmeta.PrimaryExt;
+            if (tmeta.LdScript != null) targetLdScript = tmeta.LdScript;
 
             // Lists: accumulate
             if (tmeta.Defines != null) targetDefines.AddRange(tmeta.Defines);
@@ -135,6 +141,12 @@ public class BuildConfiguration
                     targetLinkDirs.Add(Path.GetFullPath(Path.Combine(tmeta.TargetDir, dir)));
             }
         }
+
+        // The profile overrides whatever the targets resolved to.
+        var resolvedToolchainPrefix = profile.ToolchainPrefix ?? targetToolchainPrefix;
+        var resolvedArchFlags = profile.ArchFlags ?? targetArchFlags;
+        var resolvedPrimaryExt = profile.PrimaryExt ?? targetPrimaryExt ?? ".elf";
+        var resolvedLdScript = profile.LdScript ?? targetLdScript;
 
         // === Component resolution ===
         // Test builds supply their own component set (testrunner + component-under-test).
