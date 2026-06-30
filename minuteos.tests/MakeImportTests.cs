@@ -28,7 +28,7 @@ public class MakeImportTests : IDisposable
     }
 
     [Fact]
-    public void LoadTarget_ConvertsObjcopyRulesToShellSteps()
+    public void LoadTarget_ConvertsObjcopyRulesToObjcopySteps()
     {
         // Mirrors lib-arm/targets/cortex-m/Include.mk's binary/srec/ihex rules.
         var dir = WriteInclude(
@@ -44,15 +44,21 @@ public class MakeImportTests : IDisposable
         Assert.Equal(3, meta.Steps.Count);
         Assert.All(meta.Steps, s =>
         {
-            Assert.Equal("shell", s.Name);
+            Assert.Equal("gcc:objcopy", s.Name);
             Assert.Equal(BuildPhase.PostBuild, s.Phase);
             Assert.NotNull(s.Config);
         });
 
-        var commands = meta.Steps.Select(s => s.Config!["command"]).ToList();
-        Assert.Contains("{objcopy} -O binary {output} {output-base}.bin", commands);
-        Assert.Contains("{objcopy} -O srec --srec-forceS3 {output} {output-base}.s37", commands);
-        Assert.Contains("{objcopy} -O ihex {output} {output-base}.hex", commands);
+        var bin = Assert.Single(meta.Steps, s => s.Config!["format"] == "binary");
+        Assert.Equal(".bin", bin.Config!["ext"]);
+        Assert.False(bin.Config!.ContainsKey("args"));
+
+        var srec = Assert.Single(meta.Steps, s => s.Config!["format"] == "srec");
+        Assert.Equal(".s37", srec.Config!["ext"]);
+        Assert.Equal("--srec-forceS3", srec.Config!["args"]);
+
+        var hex = Assert.Single(meta.Steps, s => s.Config!["format"] == "ihex");
+        Assert.Equal(".hex", hex.Config!["ext"]);
     }
 
     [Fact]
@@ -70,8 +76,9 @@ public class MakeImportTests : IDisposable
         Assert.NotNull(reloaded);
         Assert.NotNull(reloaded.Steps);
         var step = Assert.Single(reloaded.Steps);
-        Assert.Equal("shell", step.Name);
+        Assert.Equal("gcc:objcopy", step.Name);
         Assert.Equal(BuildPhase.PostBuild, step.Phase);
-        Assert.Equal("{objcopy} -O binary {output} {output-base}.bin", step.Config!["command"]);
+        Assert.Equal("binary", step.Config!["format"]);
+        Assert.Equal(".bin", step.Config!["ext"]);
     }
 }

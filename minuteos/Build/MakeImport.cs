@@ -167,8 +167,9 @@ public static partial class MakeImport
     private static partial Regex ObjcopyRuleRegex();
 
     /// <summary>
-    /// Converts objcopy conversion rules into PostBuild shell steps, e.g.
-    /// the cortex-m binary/ihex/srec outputs.
+    /// Converts objcopy conversion rules into first-class <c>gcc:objcopy</c> steps
+    /// (e.g. the cortex-m binary/ihex/srec outputs), falling back to a generic
+    /// <c>shell</c> step for invocations that don't fit the <c>-O &lt;format&gt;</c> shape.
     /// </summary>
     private static List<StepReference> ImportObjcopySteps(string content)
     {
@@ -176,16 +177,35 @@ public static partial class MakeImport
         foreach (Match m in ObjcopyRuleRegex().Matches(content))
         {
             var ext = m.Groups[1].Value.Trim();
-            var recipeArgs = m.Groups[2].Value.Trim()
-                .Replace("$<", "{output}")
-                .Replace("$@", "{output-base}." + ext);
+            var tokens = MkTokens(m.Groups[2].Value).ToList();
 
-            steps.Add(new StepReference
+            // Prefer a gcc:objcopy step: objcopy -O <format> [extra] $< $@
+            var oIdx = tokens.IndexOf("-O");
+            if (oIdx >= 0 && oIdx + 1 < tokens.Count)
             {
-                Name = "shell",
-                Phase = BuildPhase.PostBuild,
-                Config = new Dictionary<string, string> { ["command"] = "{objcopy} " + recipeArgs },
-            });
+                var format = tokens[oIdx + 1];
+                var extra = tokens
+                    .Where((t, i) => i != oIdx && i != oIdx + 1 && t != "$<" && t != "$@")
+                    .ToList();
+
+                var config = new Dictionary<string, string> { ["format"] = format, ["ext"] = "." + ext };
+                if (extra.Count > 0)
+                    config["args"] = string.Join(' ', extra);
+
+                steps.Add(new StepReference { Name = "gcc:objcopy", Phase = BuildPhase.PostBuild, Config = config });
+            }
+            else
+            {
+                var recipeArgs = m.Groups[2].Value.Trim()
+                    .Replace("$<", "{output}")
+                    .Replace("$@", "{output-base}." + ext);
+                steps.Add(new StepReference
+                {
+                    Name = "shell",
+                    Phase = BuildPhase.PostBuild,
+                    Config = new Dictionary<string, string> { ["command"] = "{objcopy} " + recipeArgs },
+                });
+            }
         }
         return steps;
     }

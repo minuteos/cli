@@ -269,8 +269,11 @@ verifiable:
   byte-identical to the pre-refactor toolchain command lines on host + ARM/qemu
   (the one intended change: target `link-flags`, previously silently dropped, are
   now applied). `Toolchain` is reduced to a process runner.
-- [~] 4. objcopy/disassembly/size already run as pipeline steps; remaining work is
-  promoting the migrated objcopy to a first-class `gcc:objcopy`
+- [x] 4. objcopy/disassembly/size run as pipeline steps; `gcc:objcopy`
+  (`GccObjcopyStep`) is now a first-class step (`formats:` shorthand or explicit
+  `format`/`ext`/`args`). `migrate` emits `gcc:objcopy` for objcopy rules (shell
+  fallback for ones that don't fit `-O <format>`); `binary-output` kept as a
+  deprecated alias.
 - [x] 5. `run`/`qemu`/`renode` steps (`Run` phase, resolved out-of-band by
   run/test); top-level `test-runner` demoted to a deprecated fallback. Example
   updated to the step form.

@@ -30,7 +30,8 @@ public class StepRegistry
         var registry = new StepRegistry();
         registry.Register(new GitVersionStep());
         registry.Register(new DisassemblyStep());
-        registry.Register(new BinaryOutputStep());
+        registry.Register(new GccObjcopyStep());
+        registry.Register(new BinaryOutputStep());  // deprecated alias of gcc:objcopy
         registry.Register(new SizeReportStep());
         registry.Register(new ShellStep());
         registry.Register(new SubBuildStep());
