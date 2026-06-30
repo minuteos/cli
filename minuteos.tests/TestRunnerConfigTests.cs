@@ -45,7 +45,7 @@ public class TestRunnerConfigTests
     }
 
     [Fact]
-    public void Resolve_Qemu_DropsStandaloneFilterTokenWhenNoFilter()
+    public void Resolve_Qemu_FilterSubstitutesEmptyWhenUnset()
     {
         var runner = new TestRunnerConfig
         {
@@ -53,11 +53,11 @@ public class TestRunnerConfigTests
             Args = ["-kernel", "{binary}", "-append", "{filter}"],
         };
 
-        // {filter} is its own token but as the value of -append; only a *standalone*
-        // {filter} token is dropped. Here it is standalone so it is removed.
+        // With no filter, {filter} becomes "" so -append keeps its value argument
+        // (matches qemu's `-append ""`, run all tests).
         var (_, args) = runner.Resolve("/out/x.axf", null);
 
-        Assert.Equal(["-kernel", "/out/x.axf", "-append"], args);
+        Assert.Equal(["-kernel", "/out/x.axf", "-append", ""], args);
     }
 
     [Fact]

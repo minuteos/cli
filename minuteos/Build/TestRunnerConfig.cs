@@ -58,10 +58,9 @@ public class TestRunnerConfig
         var args = new List<string>();
         foreach (var arg in Args ?? [])
         {
-            // Drop a standalone {filter} token if no filter is set
-            if (arg == "{filter}" && string.IsNullOrEmpty(filter))
-                continue;
-
+            // {filter} is always substituted (empty when no filter is set), so an
+            // option that takes the filter as its value - e.g. qemu's `-append
+            // {filter}` - keeps its argument rather than being left dangling.
             var replaced = arg
                 .Replace("{binary}", binaryPath)
                 .Replace("{filter}", filter ?? "");

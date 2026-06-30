@@ -139,6 +139,28 @@ public class ProjectLayoutTests : IDisposable
     }
 
     [Fact]
+    public void ResolveTargetChain_IncludeMk_ParsesTestRun()
+    {
+        // Mirrors lib-arm/targets/qemu-arm/Include.mk.
+        CreateDir("lib/targets/all");
+        WriteFile("lib/targets/qemu-arm/Include.mk",
+            "TEST_RUN = qemu-system-arm -machine lm3s6965evb -nographic -semihosting -kernel\n" +
+            "TEST_RUN_ARGS = -append \"$(TEST_FILTERS)\"\n");
+
+        var layout = new ProjectLayout(_tempDir);
+        layout.ResolveTargetChain("qemu-arm", out var meta);
+
+        var tr = meta["qemu-arm"].TestRunner;
+        Assert.NotNull(tr);
+        Assert.Equal("qemu-system-arm", tr.Command);
+        // Remaining TEST_RUN tokens, then {binary}, then TEST_RUN_ARGS with the
+        // filter placeholder (quotes stripped, $(TEST_FILTERS) -> {filter}).
+        Assert.Equal(
+            ["-machine", "lm3s6965evb", "-nographic", "-semihosting", "-kernel", "{binary}", "-append", "{filter}"],
+            tr.Args);
+    }
+
+    [Fact]
     public void ResolveTargetChain_UsesTargetYaml()
     {
         CreateDir("lib/targets/all");

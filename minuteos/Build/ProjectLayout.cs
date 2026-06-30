@@ -164,10 +164,38 @@ public partial class ProjectLayout
             .ToList();
         if (defines.Count > 0) meta.Defines = defines;
 
+        // TEST_RUN is the emulator invocation; the test binary is appended after
+        // it (e.g. `qemu-system-arm ... -kernel <binary>`), followed by
+        // TEST_RUN_ARGS. $(TEST_FILTERS) maps to {filter}; other $(...) are dropped.
+        var testRun = MkAssign(content, "TEST_RUN");
+        if (testRun != null && !testRun.Contains("$("))
+        {
+            var tokens = MkTokens(testRun).ToList();
+            if (tokens.Count > 0)
+            {
+                var runnerArgs = tokens.Skip(1).ToList();
+                runnerArgs.Add("{binary}");
+
+                var testRunArgs = MkAssign(content, "TEST_RUN_ARGS");
+                if (testRunArgs != null)
+                {
+                    foreach (var t in MkTokens(testRunArgs))
+                    {
+                        var tok = t.Trim('"').Replace("$(TEST_FILTERS)", "{filter}");
+                        if (tok.Contains("$(")) continue;
+                        runnerArgs.Add(tok);
+                    }
+                }
+
+                meta.TestRunner = new TestRunnerConfig { Command = tokens[0], Args = runnerArgs };
+            }
+        }
+
         // Only treat the file as a target if it actually declared something.
         var hasContent = meta.Requires != null || meta.Components != null ||
             meta.ToolchainPrefix != null || meta.PrimaryExt != null ||
-            meta.LdScript != null || meta.ArchFlags != null || meta.Defines != null;
+            meta.LdScript != null || meta.ArchFlags != null || meta.Defines != null ||
+            meta.TestRunner != null;
         return hasContent ? meta : null;
     }
 

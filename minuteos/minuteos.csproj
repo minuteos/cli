@@ -7,6 +7,12 @@
     <Nullable>enable</Nullable>
     <RootNamespace>MinuteOS.Cli</RootNamespace>
     <AssemblyName>minuteos</AssemblyName>
+
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>minuteos</ToolCommandName>
+    <PackageId>minuteos</PackageId>
+    <Version>0.1.0</Version>
+    <Description>CLI for managing minuteos projects: build, test, and scaffold.</Description>
   </PropertyGroup>
 
   <ItemGroup>
