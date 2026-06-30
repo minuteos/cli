@@ -64,6 +64,24 @@ public class BuildRunner
             return false;
         }
 
+        // === Precompiled header ===
+        if (config.Pch != null)
+        {
+            Directory.CreateDirectory(config.ObjectDir);
+            if (NeedsRebuild(config.Pch, config.PchGchFile))
+            {
+                Info("  precompiling {Pch}", Path.GetFileName(config.Pch));
+                var pchResult = await _toolchain.CompilePchAsync(config, cancellationToken);
+                if (!string.IsNullOrWhiteSpace(pchResult.StdErr))
+                    _logger.LogWarning("{StdErr}", pchResult.StdErr.TrimEnd());
+                if (!pchResult.Success)
+                {
+                    _logger.LogError("Failed to compile precompiled header: exit code {ExitCode}", pchResult.ExitCode);
+                    return false;
+                }
+            }
+        }
+
         // === Compile phase ===
         Info("Compiling {Count} files...", allSources.Count);
 

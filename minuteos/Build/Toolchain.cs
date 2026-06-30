@@ -31,58 +31,84 @@ public class Toolchain
         CancellationToken cancellationToken = default)
     {
         var compiler = source.Language == SourceLanguage.C ? CC : CXX;
-        var profile = config.Profile;
 
         var args = new List<string> { "-c", source.FullPath };
+        AppendCompileFlags(args, config, Path.GetDirectoryName(source.FullPath)!, source.Language);
 
-        // Defines
+        // Use the precompiled header for C++ sources, unless this file opts out
+        // by being named *.nopch.cpp (mirrors the Make-based build).
+        if (source.Language == SourceLanguage.Cpp && config.Pch != null &&
+            !source.FullPath.EndsWith(".nopch.cpp", StringComparison.Ordinal))
+        {
+            args.AddRange(["-include", config.PchIncludeBase, "-Winvalid-pch"]);
+        }
+
+        args.AddRange(["-o", outputPath]);
+
+        return await RunAsync(compiler, args, config.Layout.ProjectRoot, cancellationToken);
+    }
+
+    /// <summary>
+    /// Compiles the project's precompiled header (precompiled.hpp) to a .gch.
+    /// Must use the same flags as the C++ source compilations or GCC rejects it.
+    /// </summary>
+    public async Task<CompilationResult> CompilePchAsync(BuildConfiguration config, CancellationToken cancellationToken = default)
+    {
+        var pch = config.Pch!;
+        Directory.CreateDirectory(Path.GetDirectoryName(config.PchGchFile)!);
+
+        var args = new List<string> { "-c", pch };
+        AppendCompileFlags(args, config, Path.GetDirectoryName(pch)!, SourceLanguage.Cpp);
+        args.AddRange(["-o", config.PchGchFile]);
+
+        return await RunAsync(CXX, args, config.Layout.ProjectRoot, cancellationToken);
+    }
+
+    /// <summary>
+    /// Appends defines, includes, dependency, architecture, common, optimization,
+    /// and language-specific flags - everything shared by source and PCH compiles.
+    /// </summary>
+    private static void AppendCompileFlags(List<string> args, BuildConfiguration config, string sourceDir, SourceLanguage language)
+    {
+        var profile = config.Profile;
+
         foreach (var define in config.Defines)
             args.AddRange(["-D", define]);
 
-        // Include directories
         foreach (var inc in config.IncludeDirs)
             args.AddRange(["-I", inc]);
 
-        // Per-source private include directory
-        var privateDir = Path.Combine(Path.GetDirectoryName(source.FullPath)!, "private");
+        var privateDir = Path.Combine(sourceDir, "private");
         if (Directory.Exists(privateDir))
             args.AddRange(["-I", privateDir]);
 
-        // Dependency generation
         args.AddRange(["-MMD", "-MP"]);
 
-        // Architecture flags from profile
         if (profile.ArchFlags != null)
             args.AddRange(profile.ArchFlags);
 
-        // Common flags
         args.AddRange(["-g", "-Wall", "-fmessage-length=0", "-fno-exceptions", "-fdata-sections", "-ffunction-sections"]);
 
-        // Optimization
         if (config.Config == "Debug")
             args.Add("-O0");
         else
             args.AddRange(["-O3", "-Os"]);
 
-        // Language-specific flags (profile overrides, then component contributions)
-        if (source.Language == SourceLanguage.C)
+        if (language == SourceLanguage.C)
         {
             args.Add("-std=gnu11");
             if (profile.CFlags != null)
                 args.AddRange(profile.CFlags);
             args.AddRange(config.ComponentCFlags);
         }
-        else if (source.Language == SourceLanguage.Cpp)
+        else if (language == SourceLanguage.Cpp)
         {
             args.AddRange(["-std=gnu++17", "-fno-rtti", "-fno-threadsafe-statics", "-fno-use-cxa-atexit"]);
             if (profile.CxxFlags != null)
                 args.AddRange(profile.CxxFlags);
             args.AddRange(config.ComponentCxxFlags);
         }
-
-        args.AddRange(["-o", outputPath]);
-
-        return await RunAsync(compiler, args, config.Layout.ProjectRoot, cancellationToken);
+        // Assembly (.S): no -std / language flags.
     }
 
     public async Task<CompilationResult> LinkAsync(

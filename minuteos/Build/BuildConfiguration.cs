@@ -74,6 +74,17 @@ public class BuildConfiguration
     public string OutputName => OutputNameOverride ?? Layout.Name;
     public string PrimaryOutput => Path.Combine(OutputRoot, OutputName + PrimaryExt);
 
+    /// <summary>
+    /// Resolved precompiled header (precompiled.hpp), if any.
+    /// </summary>
+    public string? Pch { get; init; }
+
+    /// <summary>Where the compiled PCH is written.</summary>
+    public string PchGchFile => Path.Combine(ObjectDir, "precompiled.gch");
+
+    /// <summary>The -include argument; GCC finds precompiled.gch beside it.</summary>
+    public string PchIncludeBase => Path.Combine(ObjectDir, "precompiled");
+
     public string GetObjectPath(SourceFile source)
     {
         var objRelative = Path.ChangeExtension(source.RelativePath, ".o");
@@ -226,6 +237,16 @@ public class BuildConfiguration
         var collector = new SourceCollector();
         var sources = collector.CollectSources(sourceDirs, projectRoot);
 
+        // === Resolve precompiled header ===
+        // A precompiled.hpp in the primary source dir (app builds) or in a
+        // component dir (e.g. testrunner, for test builds) enables PCH.
+        string? pch = null;
+        foreach (var dir in new[] { primarySourceDir }.Concat(componentDirs))
+        {
+            var candidate = Path.Combine(dir, "precompiled.hpp");
+            if (File.Exists(candidate)) { pch = candidate; break; }
+        }
+
         // === Assemble defines ===
         var defines = new List<string>();
         foreach (var c in resolvedComponents)
@@ -283,6 +304,7 @@ public class BuildConfiguration
             SourceDirs = sourceDirs,
             Sources = sources,
             Defines = defines,
+            Pch = pch,
             Profile = new ConfigurationProfile
             {
                 Target = primaryTarget,

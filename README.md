@@ -275,6 +275,15 @@ The scaffold (`minuteos new`) includes a minimal host testrunner and a sample
 suite so `minuteos test` works out of the box. A suite is considered failed if it
 times out, exits non-zero, or reports any failed case.
 
+## Precompiled headers
+
+If a `precompiled.hpp` is found in the project source directory (or, for test
+builds, in a component such as `testrunner`), it is compiled once to a `.gch` and
+prepended to every C++ translation unit via `-include`, matching the Make-based
+build. Sources named `*.nopch.cpp` opt out. The `.gch` is rebuilt only when the
+header (or something it includes) changes, and GCC's `-Winvalid-pch` guarantees
+correctness if it ever goes stale.
+
 ## Incremental Builds
 
 The build system uses GCC's `-MMD -MP` flags to generate dependency files. On subsequent builds, it parses these `.d` files to check if any included header has changed, rebuilding only affected translation units.
