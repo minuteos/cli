@@ -74,6 +74,58 @@ So `gcc:compile` reads `Sources` + `Settings`, writes `Objects`; `gcc:link` read
 (sources → objects → image) are the universal artifacts of any compiled-language
 build, independent of which tool fills them.
 
+`Sources` is **mutable**: a step earlier in the pipeline can add to it. This is
+the mechanism for source generation (next section).
+
+## Source generation & transforms (first-class)
+
+Generating sources is a core requirement, not an add-on — e.g. a C#→C++
+transpiler. A **transform step** runs before `gcc:compile`, consumes input files
+of some kind, emits generated sources, and feeds them into the rest of the
+pipeline:
+
+```yaml
+pipeline:
+  - cs:transpile      # *.cs  ->  generated *.cpp / *.h
+  - gcc:compile       # now sees the generated *.cpp
+  - gcc:link
+```
+
+A transform step:
+
+1. **Discovers its inputs** from the build's source directories (the context
+   exposes `SourceDirs`), by extension/glob it owns (e.g. `*.cs`). The core's
+   discovery of `Sources` stays compiler-input-only (`.c/.cpp/.S`); other input
+   kinds belong to the step that handles them.
+2. **Generates** into a dedicated dir under the output tree
+   (`context.GeneratedDir`), invoking its tool.
+3. **Registers outputs**: adds the generated `*.cpp` to the `Sources` slot and
+   the generated include dir to the `include-dirs` setting, so downstream steps
+   pick them up with no special casing.
+4. **Is incremental**: regenerates only when an input is newer than its output;
+   the generated `.cpp` then flows through the normal `.d`-based compile caching.
+
+### How the transpiler plugs in
+
+The transpiler is a separate program (`minuteos/cs-transpiler`). It plugs in as a
+transform step that invokes it as an external tool with a small I/O contract
+(inputs in, output dir out, a manifest of produced files back) — the same loose
+coupling as the `shell` step, just with output registration. Wiring it into a
+project is then one line in the pipeline:
+
+```yaml
+# a target or config that uses the transpiler
+pipeline-prepend:
+  - name: cs:transpile
+    config:
+      command: cs-transpiler {inputs} -o {generated-dir} --manifest {manifest}
+      inputs: "**/*.cs"
+```
+
+(An in-process plugin-step variant — loading the transpiler as an assembly — is
+possible later for speed, but the external-tool contract is the primary, simplest
+path and keeps the builder language-agnostic.)
+
 ## GCC as steps
 
 The current `Toolchain` class becomes a family of steps registered under a `gcc:`
