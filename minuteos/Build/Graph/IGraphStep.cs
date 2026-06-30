@@ -91,7 +91,8 @@ public sealed record ActionResult(
     bool Success,
     string? Message = null,
     IReadOnlyList<string>? DiscoveredInputs = null,
-    IReadOnlyList<Artifact>? ProducedArtifacts = null)
+    IReadOnlyList<Artifact>? ProducedArtifacts = null,
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? SettingsAdditions = null)
 {
     public static ActionResult Ok(IReadOnlyList<Artifact>? produced = null) => new(true, ProducedArtifacts: produced);
     public static ActionResult Fail(string message) => new(false, message);

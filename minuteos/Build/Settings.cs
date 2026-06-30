@@ -41,4 +41,13 @@ public class Settings
 
     /// <summary>All settings, for display/inspection.</summary>
     public IReadOnlyDictionary<string, List<string>> All => _values;
+
+    /// <summary>A deep copy, so a build can augment settings without mutating the shared bag.</summary>
+    public Settings Clone()
+    {
+        var copy = new Settings();
+        foreach (var (key, values) in _values)
+            copy._values[key] = [.. values];
+        return copy;
+    }
 }

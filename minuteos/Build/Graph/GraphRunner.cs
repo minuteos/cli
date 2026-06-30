@@ -71,6 +71,7 @@ public static class GraphRunner
             "transpile" => new TranspileStep(),
             "transform" => new TransformStep(cfg),
             "sub-build" => new SubBuildStep(cfg),
+            "git-version" => new GitVersionStep(cfg),
             _ => null,
         };
     }

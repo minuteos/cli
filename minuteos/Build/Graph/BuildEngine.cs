@@ -31,19 +31,36 @@ public sealed class BuildEngine
         var cache = BuildCache.Load(Path.Combine(config.OutputRoot, ".cache"));
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
+        var actionContext = new ActionContext
+        {
+            Toolchain = _toolchain,
+            Logger = _logger,
+            ProjectRoot = config.Layout.ProjectRoot,
+            Quiet = quiet,
+            CancellationToken = cancellationToken,
+        };
+
+        // Settings is an ambient artifact: augmenter steps (those producing
+        // kind=settings, e.g. git-version) run first and merge into a working copy
+        // of the bag, so every reader's Plan sees the fully-merged settings.
+        var settings = config.Settings.Clone();
+        foreach (var augmenter in ordered.Where(IsAugmenter))
+            if (!await RunAugmenterAsync(augmenter, config, settings, seen, actionContext))
+                return false;
+
         // The artifact pool grows as steps run; each step consumes what matches its
         // selectors and contributes its outputs (lazy fan-out - Plan runs only once
         // the step's inputs are materialized).
         var pool = new List<Artifact>();
 
-        foreach (var step in ordered)
+        foreach (var step in ordered.Where(s => !IsAugmenter(s)))
         {
             var inputs = pool.Where(a => step.Signature.Consumes.Any(a.Matches)).ToList();
 
             var planContext = new PlanContext
             {
                 Config = config,
-                Settings = config.Settings,
+                Settings = settings,
                 Toolchain = _toolchain,
                 Logger = _logger,
                 Inputs = inputs,
@@ -59,15 +76,6 @@ public sealed class BuildEngine
                 _logger.LogError("Step '{Step}' failed to plan: {Message}", step.Name, ex.Message);
                 return false;
             }
-
-            var actionContext = new ActionContext
-            {
-                Toolchain = _toolchain,
-                Logger = _logger,
-                ProjectRoot = config.Layout.ProjectRoot,
-                Quiet = quiet,
-                CancellationToken = cancellationToken,
-            };
 
             if (!await RunStepActionsAsync(actions, pool, cache, seen, actionContext))
                 return false;
@@ -156,6 +164,51 @@ public sealed class BuildEngine
             pending.RemoveAll(done.Contains);
         }
 
+        return true;
+    }
+
+    /// <summary>A settings augmenter produces <c>kind=settings</c> (e.g. git-version).</summary>
+    private static bool IsAugmenter(IGraphStep step) =>
+        step.Signature.Produces.Any(p => p.GetValueOrDefault("kind") == "settings");
+
+    /// <summary>
+    /// Runs an augmenter's actions and merges their <see cref="ActionResult.SettingsAdditions"/>
+    /// into the working bag. Augmenters always run (their contribution, e.g. a git
+    /// hash, can change every build) and don't participate in the artifact pool.
+    /// </summary>
+    private async Task<bool> RunAugmenterAsync(
+        IGraphStep step, BuildConfiguration config, Settings working, HashSet<string> seen, ActionContext actionContext)
+    {
+        var planContext = new PlanContext
+        {
+            Config = config,
+            Settings = working,
+            Toolchain = _toolchain,
+            Logger = _logger,
+            Inputs = [],
+        };
+
+        List<BuildAction> actions;
+        try { actions = step.Plan(planContext).ToList(); }
+        catch (Exception ex)
+        {
+            _logger.LogError("Augmenter '{Step}' failed to plan: {Message}", step.Name, ex.Message);
+            return false;
+        }
+
+        foreach (var action in actions)
+        {
+            seen.Add(action.Label);
+            var result = await SafeRun(action, actionContext);
+            if (result == null || !result.Success)
+            {
+                _logger.LogError("Augmenter '{Label}' failed: {Message}", action.Label, result?.Message ?? "threw");
+                return false;
+            }
+            if (result.SettingsAdditions != null)
+                foreach (var (key, values) in result.SettingsAdditions)
+                    working.Add(key, values);
+        }
         return true;
     }
 
