@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MinuteOS.Build/MinuteOS.Build.csproj" />
+    <Project Path="src/MinuteOS.Cli/MinuteOS.Cli.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MinuteOS.Build.Tests/MinuteOS.Build.Tests.csproj" />
+  </Folder>
+</Solution>
