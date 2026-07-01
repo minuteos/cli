@@ -44,20 +44,16 @@ public class InfoCommand : LoggingCommand
                 continue;
             }
 
+            var sources = new SourceCollector().CollectSources(config.SourceDirs, projectRoot);
+
             Console.WriteLine($"=== {configName} ===");
             Console.WriteLine($"  Target:       {config.Target}");
             Console.WriteLine($"  Targets:      {string.Join(" -> ", config.Targets)}");
             Console.WriteLine($"  Config:       {config.Config}");
             Console.WriteLine($"  Output:       {config.PrimaryOutput}");
-            Console.WriteLine($"  Toolchain:    {config.Profile.ToolchainPrefix ?? "(default)"}");
+            Console.WriteLine($"  Toolchain:    {config.Settings.Scalar("gcc.toolchain-prefix") ?? "(default)"}");
             Console.WriteLine($"  Components:   {string.Join(", ", config.Components)}");
-            Console.WriteLine($"  Sources:      {config.Sources.Count} files");
-            Console.WriteLine($"  Defines:      {string.Join(", ", config.Defines)}");
-
-            if (config.Profile.ArchFlags is { Count: > 0 } archFlags)
-                Console.WriteLine($"  Arch flags:   {string.Join(" ", archFlags)}");
-            if (config.LdScript != null)
-                Console.WriteLine($"  LD script:    {config.LdScript}");
+            Console.WriteLine($"  Sources:      {sources.Count} files");
             if (config.StepRefs.Count > 0)
                 Console.WriteLine($"  Steps:        {string.Join(", ", config.StepRefs.Select(s => s.Name))}");
 

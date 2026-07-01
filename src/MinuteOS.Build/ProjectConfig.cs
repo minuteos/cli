@@ -85,22 +85,19 @@ public class ProjectConfig
     }
 }
 
+/// <summary>
+/// One configuration in <c>minuteos.yaml</c>: structural selections (target,
+/// components, dirs, steps) plus a generic <see cref="Settings"/> map for all
+/// toolchain configuration (flat <c>defines</c>/<c>include-dirs</c>, namespaced
+/// <c>gcc.*</c>).
+/// </summary>
 public class ConfigurationProfile
 {
     public string? Target { get; set; }
     public string? Config { get; set; }
     public List<string>? Components { get; set; }
 
-    [YamlMember(Alias = "toolchain-prefix")]
-    public string? ToolchainPrefix { get; set; }
-
-    [YamlMember(Alias = "arch-flags")]
-    public List<string>? ArchFlags { get; set; }
-
     public List<string>? Defines { get; set; }
-
-    [YamlMember(Alias = "link-flags")]
-    public List<string>? LinkFlags { get; set; }
 
     [YamlMember(Alias = "include-dirs")]
     public List<string>? IncludeDirs { get; set; }
@@ -112,24 +109,6 @@ public class ConfigurationProfile
     [YamlMember(Alias = "source-dir")]
     public string? SourceDir { get; set; }
 
-    [YamlMember(Alias = "c-flags")]
-    public List<string>? CFlags { get; set; }
-
-    [YamlMember(Alias = "cxx-flags")]
-    public List<string>? CxxFlags { get; set; }
-
-    /// <summary>
-    /// Primary output extension (e.g. ".elf", ".axf").
-    /// </summary>
-    [YamlMember(Alias = "primary-ext")]
-    public string? PrimaryExt { get; set; }
-
-    /// <summary>
-    /// Linker script file name.
-    /// </summary>
-    [YamlMember(Alias = "ld-script")]
-    public string? LdScript { get; set; }
-
     /// <summary>
     /// Build steps to run. Components and targets also contribute steps.
     /// </summary>
@@ -137,18 +116,9 @@ public class ConfigurationProfile
 
     /// <summary>
     /// Generic, toolchain-agnostic settings merged into the build's Settings bag
-    /// (flat <c>defines</c>/<c>include-dirs</c>, namespaced <c>gcc.*</c>; each
-    /// value a scalar or list). The forward-looking form; the typed gcc fields
-    /// above are a deprecated alias.
+    /// (each value a scalar or list).
     /// </summary>
     public Dictionary<string, object>? Settings { get; set; }
-
-    /// <summary>
-    /// How to execute compiled test binaries for this configuration.
-    /// Targets can also provide one (e.g. an emulator); the profile takes precedence.
-    /// </summary>
-    [YamlMember(Alias = "test-runner")]
-    public TestRunnerConfig? TestRunner { get; set; }
 
     /// <summary>
     /// Returns a new profile with values from 'other' taking precedence over this one.
@@ -159,18 +129,10 @@ public class ConfigurationProfile
         Target = other.Target ?? Target,
         Config = other.Config ?? Config,
         Components = other.Components ?? Components,
-        ToolchainPrefix = other.ToolchainPrefix ?? ToolchainPrefix,
-        ArchFlags = other.ArchFlags ?? ArchFlags,
         Defines = other.Defines ?? Defines,
-        LinkFlags = other.LinkFlags ?? LinkFlags,
         IncludeDirs = other.IncludeDirs ?? IncludeDirs,
-        CFlags = other.CFlags ?? CFlags,
-        CxxFlags = other.CxxFlags ?? CxxFlags,
         SourceDir = other.SourceDir ?? SourceDir,
-        PrimaryExt = other.PrimaryExt ?? PrimaryExt,
-        LdScript = other.LdScript ?? LdScript,
         Steps = other.Steps ?? Steps,
         Settings = other.Settings ?? Settings,
-        TestRunner = other.TestRunner ?? TestRunner,
     };
 }

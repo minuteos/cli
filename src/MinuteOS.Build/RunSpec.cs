@@ -45,13 +45,6 @@ public static class RunSpecResolver
             return new RunSpec(command, args, timeout);
         }
 
-        // Legacy fallback: the deprecated top-level/target test-runner field.
-        if (config.TestRunner != null)
-        {
-            var (program, legacyArgs) = config.TestRunner.Resolve(image, filter);
-            return new RunSpec(program, legacyArgs, config.TestRunner.Timeout ?? DefaultTimeoutSeconds);
-        }
-
         return DirectExec(image, filter, DefaultTimeoutSeconds);
     }
 

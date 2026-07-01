@@ -30,24 +30,6 @@ public class ComponentMeta
     public List<string>? IncludeDirs { get; set; }
 
     /// <summary>
-    /// Extra C compiler flags.
-    /// </summary>
-    [YamlMember(Alias = "c-flags")]
-    public List<string>? CFlags { get; set; }
-
-    /// <summary>
-    /// Extra C++ compiler flags.
-    /// </summary>
-    [YamlMember(Alias = "cxx-flags")]
-    public List<string>? CxxFlags { get; set; }
-
-    /// <summary>
-    /// Extra linker flags.
-    /// </summary>
-    [YamlMember(Alias = "link-flags")]
-    public List<string>? LinkFlags { get; set; }
-
-    /// <summary>
     /// Additional source directories (relative to the lib root, supports glob patterns).
     /// Used by wrapper components like fatfs/lvgl that reference external source trees.
     /// Example: "../../../fatfs/source/" or "../../lvgl/src/draw/sw/blend/"
@@ -63,16 +45,9 @@ public class ComponentMeta
 
     /// <summary>
     /// Generic, toolchain-agnostic settings merged into the build's Settings bag
-    /// (e.g. <c>gcc.c-flags</c>). The forward-looking form that <c>migrate</c>
-    /// emits; the typed flag fields above are a deprecated alias.
+    /// (e.g. <c>gcc.cxx-flags</c>); each value a scalar or list.
     /// </summary>
     public Dictionary<string, object>? Settings { get; set; }
-
-    /// <summary>
-    /// Source file patterns to exclude from compilation.
-    /// </summary>
-    [YamlMember(Alias = "exclude-sources")]
-    public List<string>? ExcludeSources { get; set; }
 
     /// <summary>
     /// The directory this metadata was loaded from.

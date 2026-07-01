@@ -25,19 +25,23 @@ public class MetaYamlRoundTripTests : IDisposable
         var meta = new TargetMeta
         {
             Requires = ["cmsis"],
-            ToolchainPrefix = "arm-none-eabi-",
-            ArchFlags = ["-mcpu=cortex-m3", "-mthumb"],
-            LinkFlags = ["-nostartfiles", "-specs=nano.specs"],
-            PrimaryExt = ".axf",
-            LdScript = "default.ld",
-            LinkDirs = ["ld_fallbacks/"],
             Defines = ["LINKER_ORDERED_SECTION=\".text.ord\""],
-            TestRunner = new TestRunnerConfig
+            Settings = new Dictionary<string, object>
             {
-                Command = "qemu-system-arm",
-                // "null" must survive the round-trip as the string, not YAML null.
-                Args = ["-monitor", "null", "-kernel", "{binary}", "-append", "{filter}"],
+                ["gcc.toolchain-prefix"] = "arm-none-eabi-",
+                ["gcc.arch-flags"] = new List<string> { "-mcpu=cortex-m3", "-mthumb" },
+                ["gcc.primary-ext"] = ".axf",
             },
+            Steps =
+            [
+                new StepReference
+                {
+                    Name = "qemu",
+                    Phase = BuildPhase.Run,
+                    // "null" must survive the round-trip as the string, not YAML null.
+                    Config = new() { ["args"] = "-monitor null -kernel \"{image}\"" },
+                },
+            ],
         };
 
         var dir = Path.Combine(_tempDir, "cortex-m");
@@ -48,15 +52,13 @@ public class MetaYamlRoundTripTests : IDisposable
 
         Assert.NotNull(loaded);
         Assert.Equal(["cmsis"], loaded.Requires);
-        Assert.Equal("arm-none-eabi-", loaded.ToolchainPrefix);
-        Assert.Equal(["-mcpu=cortex-m3", "-mthumb"], loaded.ArchFlags);
-        Assert.Equal(".axf", loaded.PrimaryExt);
-        Assert.Equal("default.ld", loaded.LdScript);
-        Assert.Equal(["ld_fallbacks/"], loaded.LinkDirs);
         Assert.Equal(["LINKER_ORDERED_SECTION=\".text.ord\""], loaded.Defines);
-        Assert.NotNull(loaded.TestRunner);
-        Assert.Equal("qemu-system-arm", loaded.TestRunner.Command);
-        Assert.Equal(["-monitor", "null", "-kernel", "{binary}", "-append", "{filter}"], loaded.TestRunner.Args);
+        Assert.NotNull(loaded.Settings);
+        Assert.Equal("arm-none-eabi-", loaded.Settings["gcc.toolchain-prefix"]);
+        Assert.Equal(".axf", loaded.Settings["gcc.primary-ext"]);
+        var run = Assert.Single(loaded.Steps!);
+        Assert.Equal(BuildPhase.Run, run.Phase);
+        Assert.Equal("-monitor null -kernel \"{image}\"", run.Config!["args"]);
     }
 
     [Fact]
@@ -98,9 +100,6 @@ public class MetaYamlRoundTripTests : IDisposable
         Assert.Equal("arm-none-eabi-", imported.Settings["gcc.toolchain-prefix"]);
         Assert.Equal(".axf", imported.Settings["gcc.primary-ext"]);
         Assert.Equal(["cmsis"], imported.Requires);
-        // The deprecated typed fields are no longer populated by the importer.
-        Assert.Null(imported.ToolchainPrefix);
-        Assert.Null(imported.ArchFlags);
 
         File.WriteAllText(Path.Combine(dir, TargetMeta.FileName), imported.ToYaml());
         var reloaded = TargetMeta.TryLoad(dir, "cortex-m");
@@ -123,7 +122,6 @@ public class MetaYamlRoundTripTests : IDisposable
 
         var meta = MakeImport.LoadTarget(dir, "qemu");
         Assert.NotNull(meta);
-        Assert.Null(meta.TestRunner);     // no longer emitted
         Assert.NotNull(meta.Steps);
 
         var run = Assert.Single(meta.Steps, s => s.Name == "run");

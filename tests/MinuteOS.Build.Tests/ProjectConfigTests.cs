@@ -198,30 +198,26 @@ public class ProjectConfigTests : IDisposable
             configurations:
               arm:
                 target: cortex-m4
-                toolchain-prefix: arm-none-eabi-
-                arch-flags:
-                  - -mcpu=cortex-m4
-                  - -mthumb
-                primary-ext: .axf
-                ld-script: default.ld
-                link-flags:
-                  - -nostartfiles
                 defines:
                   - NDEBUG
+                settings:
+                  gcc.toolchain-prefix: arm-none-eabi-
+                  gcc.arch-flags: [-mcpu=cortex-m4, -mthumb]
+                  gcc.primary-ext: .axf
+                  gcc.ld-script: default.ld
+                  gcc.link-flags: [-nostartfiles]
             """);
 
         var config = ProjectConfig.Load(_tempDir);
         var profile = config.Resolve("arm");
 
         Assert.Equal("cortex-m4", profile.Target);
-        Assert.Equal("arm-none-eabi-", profile.ToolchainPrefix);
-        Assert.Equal(".axf", profile.PrimaryExt);
-        Assert.Equal("default.ld", profile.LdScript);
-        Assert.NotNull(profile.ArchFlags);
-        Assert.Equal(2, profile.ArchFlags.Count);
-        Assert.NotNull(profile.LinkFlags);
-        Assert.Contains("-nostartfiles", profile.LinkFlags);
+        Assert.Equal(["kernel"], profile.Components);   // inherited from defaults
         Assert.NotNull(profile.Defines);
         Assert.Contains("NDEBUG", profile.Defines);
+        Assert.NotNull(profile.Settings);
+        Assert.Equal("arm-none-eabi-", profile.Settings["gcc.toolchain-prefix"]);
+        Assert.Equal(".axf", profile.Settings["gcc.primary-ext"]);
+        Assert.True(profile.Settings.ContainsKey("gcc.link-flags"));
     }
 }

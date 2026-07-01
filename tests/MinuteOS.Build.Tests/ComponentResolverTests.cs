@@ -138,7 +138,7 @@ public class ComponentResolverTests : IDisposable
     {
         CreateComponent("targets/all", "base");
         CreateComponent("targets/all", "mylib", componentYaml:
-            "requires:\n  - base\ndefines:\n  - MYLIB_ENABLED\nc-flags:\n  - -Wno-unused\n");
+            "requires:\n  - base\ndefines:\n  - MYLIB_ENABLED\nsettings:\n  gcc.c-flags: [-Wno-unused]\n");
 
         var layout = new ProjectLayout(_tempDir);
         var resolver = new ComponentResolver(layout);
@@ -150,8 +150,8 @@ public class ComponentResolverTests : IDisposable
         var meta = resolver.ComponentMetadata["mylib"];
         Assert.NotNull(meta.Defines);
         Assert.Contains("MYLIB_ENABLED", meta.Defines);
-        Assert.NotNull(meta.CFlags);
-        Assert.Contains("-Wno-unused", meta.CFlags);
+        Assert.NotNull(meta.Settings);
+        Assert.True(meta.Settings.ContainsKey("gcc.c-flags"));
     }
 
     [Fact]

@@ -4,8 +4,10 @@ using Microsoft.Extensions.FileSystemGlobbing.Abstractions;
 namespace MinuteOS.Build;
 
 /// <summary>
-/// Represents the fully resolved build configuration for a minuteos project.
-/// Merges contributions from: project config, target metadata, and component metadata.
+/// The fully resolved build configuration for a minuteos project: the merge of
+/// project config, target metadata (with inheritance), and component metadata
+/// (with transitive requires). Structure (names, dirs, steps) is typed; all
+/// toolchain configuration lives in the <see cref="Settings"/> bag.
 /// </summary>
 public class BuildConfiguration : IBuildConfiguration
 {
@@ -17,50 +19,20 @@ public class BuildConfiguration : IBuildConfiguration
     public required List<string> Components { get; init; }
     public required IReadOnlyList<string> TargetDirs { get; init; }
     public required IReadOnlyList<string> ComponentDirs { get; init; }
-    public required List<string> IncludeDirs { get; init; }
     public required IReadOnlyList<string> SourceDirs { get; init; }
+    public required List<StepReference> StepRefs { get; init; }
 
-    /// <summary>Project root (from the layout); part of the <see cref="IBuildConfiguration"/> surface.</summary>
+    /// <summary>Aggregated, toolchain-agnostic settings consumed by build steps.</summary>
+    public required Settings Settings { get; init; }
+
+    /// <summary>Project root (from the layout).</summary>
     public string ProjectRoot => Layout.ProjectRoot;
 
     /// <summary>Primary source dir (from the layout).</summary>
     public string SourceDir => Layout.SourceDir;
-    public required List<SourceFile> Sources { get; init; }
-    public required List<string> Defines { get; init; }
-    public required ConfigurationProfile Profile { get; init; }
-    public required List<StepReference> StepRefs { get; init; }
-    public required IReadOnlyDictionary<string, ComponentMeta> ComponentMetadata { get; init; }
-    public required IReadOnlyDictionary<string, TargetMeta> TargetMetadata { get; init; }
-    public required List<string> ComponentCFlags { get; init; }
-    public required List<string> ComponentCxxFlags { get; init; }
-    public required List<string> ComponentLinkFlags { get; init; }
 
-    /// <summary>
-    /// Resolved primary extension (.elf, .axf, etc.)
-    /// Precedence: profile > target metadata > default (.elf)
-    /// </summary>
-    public required string PrimaryExt { get; init; }
-
-    /// <summary>
-    /// Resolved linker script path, if any.
-    /// </summary>
-    public string? LdScript { get; init; }
-
-    /// <summary>
-    /// Additional linker search directories from targets.
-    /// </summary>
-    public required List<string> LinkDirs { get; init; }
-
-    /// <summary>
-    /// Aggregated, toolchain-agnostic settings consumed by build steps.
-    /// The typed fields above are gradually becoming views over this.
-    /// </summary>
-    public required Settings Settings { get; init; }
-
-    /// <summary>
-    /// How to run compiled test binaries for this configuration, if any.
-    /// </summary>
-    public TestRunnerConfig? TestRunner { get; init; }
+    /// <summary>Primary output extension, from the settings bag (default .elf).</summary>
+    public string PrimaryExt => Settings.Scalar("gcc.primary-ext") ?? ".elf";
 
     /// <summary>
     /// Overrides the output binary name (defaults to the project name).
@@ -97,12 +69,6 @@ public class BuildConfiguration : IBuildConfiguration
     /// <summary>The -include argument; GCC finds precompiled.gch beside it.</summary>
     public string PchIncludeBase => Path.Combine(ObjectDir, "precompiled");
 
-    public string GetObjectPath(SourceFile source)
-    {
-        var objRelative = Path.ChangeExtension(source.RelativePath, ".o");
-        return Path.Combine(ObjectDir, objRelative);
-    }
-
     public static BuildConfiguration Create(
         ProjectConfig projectConfig, string configName, string projectRoot, BuildOverrides? overrides = null)
     {
@@ -132,63 +98,31 @@ public class BuildConfiguration : IBuildConfiguration
             .Concat(targetNames.Where(t => t == "all")).ToList();
         var targetDirs = layout.ResolveTargetDirs(targetDirsOrder);
 
-        // Merge target metadata contributions.
-        string? targetToolchainPrefix = null;
-        List<string>? targetArchFlags = null;
-        string? targetPrimaryExt = null;
-        string? targetLdScript = null;
+        // Merge target metadata contributions. targetNames are parents-first, so
+        // appending settings maps in order gives the most-specific target
+        // precedence for scalars; lists accumulate across the chain.
         var targetDefines = new List<string>();
-        var targetLinkFlags = new List<string>();
-        var targetLinkDirs = new List<string>();
         var targetComponents = new List<string>();
         var stepRefs = new List<StepReference>();
-        // Explicit toolchain-agnostic settings maps, gathered in precedence order
-        // (target chain parents-first, then components, then profile) and merged
-        // into the Settings bag after the typed-field folding below.
         var settingsMaps = new List<Dictionary<string, object>>();
 
-        // targetNames are ordered parents-first, so iterating and keeping the
-        // last value gives the most-specific (child) target precedence for
-        // scalars; lists accumulate across the whole chain.
         foreach (var targetName in targetNames)
         {
             if (!targetMetadata.TryGetValue(targetName, out var tmeta))
                 continue;
 
-            // Scalars: most-specific (later) target wins
-            if (tmeta.ToolchainPrefix != null) targetToolchainPrefix = tmeta.ToolchainPrefix;
-            if (tmeta.ArchFlags != null) targetArchFlags = tmeta.ArchFlags;
-            if (tmeta.PrimaryExt != null) targetPrimaryExt = tmeta.PrimaryExt;
-            if (tmeta.LdScript != null) targetLdScript = tmeta.LdScript;
-
-            // Lists: accumulate
             if (tmeta.Defines != null) targetDefines.AddRange(tmeta.Defines);
-            if (tmeta.LinkFlags != null) targetLinkFlags.AddRange(tmeta.LinkFlags);
             if (tmeta.Components != null) targetComponents.AddRange(tmeta.Components);
             if (tmeta.Steps != null) stepRefs.AddRange(tmeta.Steps);
             if (tmeta.Settings != null) settingsMaps.Add(tmeta.Settings);
-
-            if (tmeta.LinkDirs != null)
-            {
-                foreach (var dir in tmeta.LinkDirs)
-                    targetLinkDirs.Add(Path.GetFullPath(Path.Combine(tmeta.TargetDir, dir)));
-            }
         }
-
-        // The profile overrides whatever the targets resolved to.
-        var resolvedToolchainPrefix = profile.ToolchainPrefix ?? targetToolchainPrefix;
-        var resolvedArchFlags = profile.ArchFlags ?? targetArchFlags;
-        var resolvedPrimaryExt = profile.PrimaryExt ?? targetPrimaryExt ?? ".elf";
-        var resolvedLdScript = profile.LdScript ?? targetLdScript;
 
         // === Component resolution ===
         // Test builds supply their own component set (testrunner + component-under-test).
         var baseComponents = overrides?.Components ?? profile.Components ?? ["kernel"];
         var resolver = new ComponentResolver(layout);
-        var requestedComponents = new List<string>();
-        requestedComponents.AddRange(targetComponents);
-        requestedComponents.AddRange(baseComponents);
-        var resolvedComponents = resolver.ResolveComponents(requestedComponents, targetDirs);
+        var resolvedComponents = resolver.ResolveComponents(
+            targetComponents.Concat(baseComponents), targetDirs);
         var componentMeta = resolver.ComponentMetadata;
 
         var componentDirs = layout.ResolveComponentDirs(targetDirs, resolvedComponents);
@@ -197,9 +131,6 @@ public class BuildConfiguration : IBuildConfiguration
         var componentDefines = new List<string>();
         var componentIncludeDirs = new List<string>();
         var componentSourceDirs = new List<string>();
-        var componentCFlags = new List<string>();
-        var componentCxxFlags = new List<string>();
-        var componentLinkFlags = new List<string>();
 
         foreach (var component in resolvedComponents)
         {
@@ -209,44 +140,27 @@ public class BuildConfiguration : IBuildConfiguration
             if (meta.Defines != null)
                 componentDefines.AddRange(meta.Defines);
 
-            if (meta.IncludeDirs != null)
-            {
-                foreach (var dir in meta.IncludeDirs)
-                    componentIncludeDirs.Add(Path.GetFullPath(Path.Combine(meta.ComponentDir, dir)));
-            }
+            foreach (var dir in meta.IncludeDirs ?? [])
+                componentIncludeDirs.Add(Path.GetFullPath(Path.Combine(meta.ComponentDir, dir)));
 
-            if (meta.SourceDirs != null)
-            {
-                foreach (var pattern in meta.SourceDirs)
-                {
-                    var resolved = ResolveSourceDirPattern(meta.ComponentDir, pattern);
-                    componentSourceDirs.AddRange(resolved);
-                }
-            }
+            foreach (var pattern in meta.SourceDirs ?? [])
+                componentSourceDirs.AddRange(ResolveSourceDirPattern(meta.ComponentDir, pattern));
 
-            if (meta.CFlags != null) componentCFlags.AddRange(meta.CFlags);
-            if (meta.CxxFlags != null) componentCxxFlags.AddRange(meta.CxxFlags);
-            if (meta.LinkFlags != null) componentLinkFlags.AddRange(meta.LinkFlags);
             if (meta.Steps != null) stepRefs.AddRange(meta.Steps);
             if (meta.Settings != null) settingsMaps.Add(meta.Settings);
         }
 
-        // Steps from project-level config
+        // Steps + settings from the project-level config (highest precedence).
         if (profile.Steps != null)
             stepRefs.AddRange(profile.Steps);
-
-        // Profile settings have the highest precedence (merged last).
         if (profile.Settings != null)
             settingsMaps.Add(profile.Settings);
 
         // === Assemble include dirs ===
         var includeDirs = new List<string>();
         includeDirs.AddRange(componentIncludeDirs);
-        if (profile.IncludeDirs != null)
-        {
-            foreach (var dir in profile.IncludeDirs)
-                includeDirs.Add(Path.GetFullPath(Path.Combine(projectRoot, dir)));
-        }
+        foreach (var dir in profile.IncludeDirs ?? [])
+            includeDirs.Add(Path.GetFullPath(Path.Combine(projectRoot, dir)));
         if (Directory.Exists(primarySourceDir))
             includeDirs.Add(primarySourceDir);
         includeDirs.AddRange(targetDirs);
@@ -261,9 +175,6 @@ public class BuildConfiguration : IBuildConfiguration
         sourceDirs.AddRange(componentSourceDirs);
         sourceDirs = sourceDirs.Distinct().ToList();
 
-        var collector = new SourceCollector();
-        var sources = collector.CollectSources(sourceDirs, projectRoot);
-
         // === Resolve precompiled header ===
         // A precompiled.hpp in the primary source dir (app builds) or in a
         // component dir (e.g. testrunner, for test builds) enables PCH.
@@ -275,6 +186,7 @@ public class BuildConfiguration : IBuildConfiguration
         }
 
         // === Assemble defines ===
+        // Every component/target contributes a C<name>/T<name> marker define.
         var defines = new List<string>();
         foreach (var c in resolvedComponents)
             defines.Add("C" + c.Replace("/", "_").Replace("-", "_"));
@@ -284,64 +196,30 @@ public class BuildConfiguration : IBuildConfiguration
         if (config == "Trace") defines.Add("TRACE");
         defines.AddRange(targetDefines);
         defines.AddRange(componentDefines);
-        if (profile.Defines != null)
-            defines.AddRange(profile.Defines);
+        defines.AddRange(profile.Defines ?? []);
 
-        // The ld-script is resolved (bare name -> path) after the settings bag is
-        // assembled, so an explicit `settings: { gcc.ld-script: ... }` is honored.
-        string? ldScriptPath = null;
-
-        // Resolve test runner: profile takes precedence, else the most specific
-        // target (child-first) that declares one.
-        var resolvedTestRunner = profile.TestRunner;
-        if (resolvedTestRunner == null)
-        {
-            for (int i = targetNames.Count - 1; i >= 0 && resolvedTestRunner == null; i--)
-            {
-                if (targetMetadata.TryGetValue(targetNames[i], out var tmeta))
-                    resolvedTestRunner = tmeta.TestRunner;
-            }
-        }
-
-        // Aggregate the toolchain-agnostic settings bag. The typed fields fold in
-        // first (a deprecated alias), then explicit `settings:` maps are merged on
-        // top - so settings is the single source of truth for the steps.
+        // === Aggregate the settings bag ===
+        // Structural keys first, then the explicit settings maps in precedence
+        // order (target chain, components, profile). Scalars resolve to the last
+        // (most-specific) value; lists accumulate.
         var settings = new Settings.Builder();
         settings.Add("defines", defines);
         settings.Add("include-dirs", includeDirs);
-        settings.Add("gcc.arch-flags", resolvedArchFlags);
-        settings.Add("gcc.c-flags", (profile.CFlags ?? []).Concat(componentCFlags));
-        settings.Add("gcc.cxx-flags", (profile.CxxFlags ?? []).Concat(componentCxxFlags));
-        // Target link-flags (e.g. --specs/-nostartfiles) first, then profile +
-        // components.
-        settings.Add("gcc.link-flags", targetLinkFlags);
-        settings.Add("gcc.link-flags", (profile.LinkFlags ?? []).Concat(componentLinkFlags));
-        settings.Add("gcc.link-dirs", targetLinkDirs);
-        settings.Set("gcc.toolchain-prefix", resolvedToolchainPrefix);
-        settings.Set("gcc.ld-script", resolvedLdScript);
-        settings.Set("gcc.primary-ext", resolvedPrimaryExt);
-
-        // Merge the explicit settings maps (target chain, components, profile, in
-        // precedence order). Scalars resolve to the last (most-specific) value.
         foreach (var map in settingsMaps)
-            MergeSettings(settings, map);
-
-        // Re-derive the resolved scalars from the now-authoritative bag so an
-        // explicit settings entry takes effect for these too.
-        resolvedToolchainPrefix = settings.Scalar("gcc.toolchain-prefix");
-        resolvedPrimaryExt = settings.Scalar("gcc.primary-ext") ?? ".elf";
+            foreach (var (key, value) in map)
+                settings.Add(key, NormalizeSettingValue(value));
 
         // Resolve the ld-script name to a path via the link search dirs and store
         // the concrete path back so the link step emits a usable -T argument.
-        var ldScriptName = settings.Scalar("gcc.ld-script");
-        if (ldScriptName != null)
+        if (settings.Scalar("gcc.ld-script") is { } ldScriptName)
         {
-            foreach (var dir in targetLinkDirs.Concat(targetDirs).Concat(componentDirs))
-            {
-                var candidate = Path.Combine(dir, ldScriptName);
-                if (File.Exists(candidate)) { ldScriptPath = candidate; break; }
-            }
-            ldScriptPath ??= ldScriptName;
+            var searchDirs = settings.List("gcc.link-dirs")
+                .Select(d => Path.IsPathRooted(d) ? d : "")
+                .Where(d => d.Length > 0)
+                .Concat(targetDirs).Concat(componentDirs);
+            var ldScriptPath = searchDirs
+                .Select(dir => Path.Combine(dir, ldScriptName))
+                .FirstOrDefault(File.Exists) ?? ldScriptName;
             settings.Set("gcc.ld-script", ldScriptPath);
         }
 
@@ -355,52 +233,13 @@ public class BuildConfiguration : IBuildConfiguration
             Components = resolvedComponents,
             TargetDirs = targetDirs,
             ComponentDirs = componentDirs,
-            IncludeDirs = includeDirs,
             SourceDirs = sourceDirs,
-            Sources = sources,
-            Defines = defines,
             Pch = pch,
-            Profile = new ConfigurationProfile
-            {
-                Target = primaryTarget,
-                Config = config,
-                Components = profile.Components,
-                ToolchainPrefix = resolvedToolchainPrefix,
-                ArchFlags = resolvedArchFlags,
-                Defines = profile.Defines,
-                LinkFlags = profile.LinkFlags,
-                IncludeDirs = profile.IncludeDirs,
-                CFlags = profile.CFlags,
-                CxxFlags = profile.CxxFlags,
-                PrimaryExt = resolvedPrimaryExt,
-                LdScript = resolvedLdScript,
-                Steps = profile.Steps,
-            },
             StepRefs = stepRefs,
-            ComponentMetadata = componentMeta,
-            TargetMetadata = targetMetadata,
-            ComponentCFlags = componentCFlags,
-            ComponentCxxFlags = componentCxxFlags,
-            ComponentLinkFlags = componentLinkFlags,
-            PrimaryExt = resolvedPrimaryExt,
-            LdScript = ldScriptPath,
-            LinkDirs = targetLinkDirs,
             Settings = settings.Build(),
-            TestRunner = resolvedTestRunner,
             OutputNameOverride = overrides?.OutputName,
             OutputSubdir = overrides?.OutputSubdir,
         };
-    }
-
-    /// <summary>
-    /// Merges a raw YAML settings map (each value a scalar or a sequence) into the
-    /// Settings bag, appending so list keys accumulate and scalar keys resolve to
-    /// the most-specific (last-merged) value.
-    /// </summary>
-    private static void MergeSettings(Settings.Builder settings, Dictionary<string, object> map)
-    {
-        foreach (var (key, value) in map)
-            settings.Add(key, NormalizeSettingValue(value));
     }
 
     private static IEnumerable<string> NormalizeSettingValue(object? value) => value switch
@@ -426,16 +265,11 @@ public class BuildConfiguration : IBuildConfiguration
             return Directory.Exists(resolved) ? [resolved] : [];
         }
 
-        // Use glob matching for wildcard patterns
-        var searchRoot = baseDir;
-        var globPattern = pattern;
-
-        // Walk up to find the non-wildcard root
-        var parts = pattern.Split('/', '\\');
+        // Walk up to the non-wildcard root, then glob below it.
         var fixedParts = new List<string>();
         var globParts = new List<string>();
         var foundWild = false;
-        foreach (var part in parts)
+        foreach (var part in pattern.Split('/', '\\'))
         {
             if (foundWild || part.Contains('*') || part.Contains('?'))
             {
@@ -448,9 +282,9 @@ public class BuildConfiguration : IBuildConfiguration
             }
         }
 
-        if (fixedParts.Count > 0)
-            searchRoot = Path.GetFullPath(Path.Combine(baseDir, Path.Combine(fixedParts.ToArray())));
-
+        var searchRoot = fixedParts.Count > 0
+            ? Path.GetFullPath(Path.Combine(baseDir, Path.Combine(fixedParts.ToArray())))
+            : baseDir;
         if (!Directory.Exists(searchRoot))
             return [];
 

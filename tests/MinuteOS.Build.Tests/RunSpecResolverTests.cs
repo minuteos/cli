@@ -104,41 +104,4 @@ public class RunSpecResolverTests : IDisposable
         Assert.Equal(["--run", "/out/app.elf", "--filter", "Foo"], spec.Args);
     }
 
-    [Fact]
-    public void LegacyTestRunner_UsedWhenNoRunStep()
-    {
-        var config = Configure(
-            "name: d\nconfigurations:\n  c:\n    target: host\n    components: []\n" +
-            "    test-runner:\n" +
-            "      command: qemu-system-arm\n" +
-            "      args: [-kernel, \"{binary}\"]\n" +
-            "      timeout: 45\n", "c");
-
-        var spec = RunSpecResolver.Resolve(config, "/out/app.elf", filter: null);
-
-        Assert.Equal("qemu-system-arm", spec.Program);
-        Assert.Equal(["-kernel", "/out/app.elf"], spec.Args);
-        Assert.Equal(45, spec.TimeoutSeconds);
-    }
-
-    [Fact]
-    public void RunStep_TakesPrecedenceOverLegacyTestRunner()
-    {
-        var config = Configure(
-            "name: d\nconfigurations:\n  c:\n    target: host\n    components: []\n" +
-            "    test-runner:\n" +
-            "      command: legacy-runner\n" +
-            "      args: [\"{binary}\"]\n" +
-            "    steps:\n" +
-            "      - name: run\n" +
-            "        phase: Run\n" +
-            "        config:\n" +
-            "          command: new-runner\n" +
-            "          args: '{image}'\n", "c");
-
-        var spec = RunSpecResolver.Resolve(config, "/out/app.elf", filter: null);
-
-        Assert.Equal("new-runner", spec.Program);
-        Assert.Equal(["/out/app.elf"], spec.Args);
-    }
 }

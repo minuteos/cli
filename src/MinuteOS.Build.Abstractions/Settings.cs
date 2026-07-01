@@ -73,6 +73,10 @@ public sealed class Settings
         public string? Scalar(string key) =>
             _values.TryGetValue(key, out var v) && v.Count > 0 ? v[^1] : null;
 
+        /// <summary>All values for a list-valued setting under construction.</summary>
+        public IReadOnlyList<string> List(string key) =>
+            _values.TryGetValue(key, out var v) ? v : [];
+
         public Settings Build() => new(
             _values.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<string>)kv.Value.ToArray()));
     }

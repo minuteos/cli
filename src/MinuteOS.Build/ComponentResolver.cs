@@ -85,20 +85,29 @@ public class ComponentResolver
             }
             else
             {
-                // Merge: later target dirs can add to the metadata
-                merged.Requires ??= meta.Requires;
+                // Merge: later (less specific) target dirs add to the metadata.
+                // Dir-relative entries are made absolute against THEIR component
+                // dir, since the merged meta keeps the first (most specific) dir.
+                if (meta.Requires != null)
+                    merged.Requires = (merged.Requires ?? []).Union(meta.Requires).ToList();
                 if (meta.Defines != null)
                     (merged.Defines ??= []).AddRange(meta.Defines);
                 if (meta.IncludeDirs != null)
-                    (merged.IncludeDirs ??= []).AddRange(meta.IncludeDirs);
-                if (meta.CFlags != null)
-                    (merged.CFlags ??= []).AddRange(meta.CFlags);
-                if (meta.CxxFlags != null)
-                    (merged.CxxFlags ??= []).AddRange(meta.CxxFlags);
-                if (meta.LinkFlags != null)
-                    (merged.LinkFlags ??= []).AddRange(meta.LinkFlags);
+                    (merged.IncludeDirs ??= []).AddRange(
+                        meta.IncludeDirs.Select(d => Path.GetFullPath(Path.Combine(meta.ComponentDir, d))));
+                if (meta.SourceDirs != null)
+                    (merged.SourceDirs ??= []).AddRange(meta.SourceDirs.Select(d =>
+                        d.Contains('*') || d.Contains('?') ? d : Path.GetFullPath(Path.Combine(meta.ComponentDir, d))));
                 if (meta.Steps != null)
                     (merged.Steps ??= []).AddRange(meta.Steps);
+                if (meta.Settings != null)
+                {
+                    merged.Settings ??= [];
+                    foreach (var (key, value) in meta.Settings)
+                        merged.Settings[key] = merged.Settings.TryGetValue(key, out var existing)
+                            ? CombineSettingValues(existing, value)
+                            : value;
+                }
             }
         }
 
@@ -106,5 +115,16 @@ public class ComponentResolver
             _metaCache[component] = merged;
 
         return merged;
+    }
+
+    /// <summary>
+    /// Combines two raw YAML setting values into a list (list keys accumulate;
+    /// scalar keys still resolve last-wins downstream, since the bag keeps order).
+    /// </summary>
+    private static object CombineSettingValues(object a, object b)
+    {
+        static IEnumerable<object> Items(object v) =>
+            v is string ? [v] : v is System.Collections.IEnumerable e ? e.Cast<object>() : [v];
+        return Items(a).Concat(Items(b)).ToList();
     }
 }
