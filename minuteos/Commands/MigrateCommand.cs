@@ -83,6 +83,7 @@ public partial class MigrateCommand : LoggingCommand
                         Logger.LogWarning("MANUAL  {File} - non-declarative Make, needs build steps:", Rel(root, mk));
                         foreach (var l in leftover.Take(4))
                             Logger.LogWarning("            {Line}", l);
+                        HintRecursiveMake(leftover);
                     }
                     DeleteIfClean(leftover);
                     continue;
@@ -115,6 +116,7 @@ public partial class MigrateCommand : LoggingCommand
                     manual++;
                     Logger.LogWarning("            ^ also has non-declarative Make (needs steps): {Lines}",
                         string.Join(" | ", leftover.Take(3)));
+                    HintRecursiveMake(leftover);
                 }
                 DeleteIfClean(leftover);
             }
@@ -156,6 +158,24 @@ public partial class MigrateCommand : LoggingCommand
             result.Add(line.Trim());
         }
         return result;
+    }
+
+    /// <summary>
+    /// Recognizes the recursive-<c>$(MAKE)</c> bootloader pattern (a nested build
+    /// embedded as a blob) and points to its declarative replacement.
+    /// </summary>
+    private void HintRecursiveMake(IReadOnlyList<string> leftover)
+    {
+        if (!leftover.Any(l => l.Contains("$(MAKE)")))
+            return;
+        Logger.LogWarning(
+            "            HINT: this is a recursive sub-build (e.g. a bootloader embedded as a blob).");
+        Logger.LogWarning(
+            "            Replace it with a 'sub-build' step referencing a sub-configuration, e.g.:");
+        Logger.LogWarning(
+            "              steps: [{{ name: sub-build, config: {{ configuration: bootldr, blob-section: .binboot }} }}]");
+        Logger.LogWarning(
+            "            plus a 'bootldr' configuration (its own target/components/source-dir/ld-script).");
     }
 
     private static string Rel(string root, string path) => Path.GetRelativePath(root, path);

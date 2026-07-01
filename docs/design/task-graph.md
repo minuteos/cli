@@ -27,10 +27,20 @@ Status: **implemented and default** (supersedes the fixed-slot model in
 > surfaced and fixed one real bug: relative `gcc.link-dirs` from a migrated
 > target weren't resolved against the target dir.)
 >
-> **Remaining (optional polish only):** sub-build incrementality (currently
-> `AlwaysRun`), cross-step parallelism (today only intra-step), content-hash
-> fingerprints, and porting the recursive-bootloader manual case to a project
-> `sub-build` (as done previously by hand).
+> **Polish done:** content-hash fingerprints (pluggable `IFingerprinter`,
+> `build --hash`), incremental sub-build (nested-build split from the cache-gated
+> embed), and cross-step parallelism (step-level wave scheduler; shared action
+> gate; locked pool/cache) — the last two re-validated on the real lib at host
+> 67/67 + ARM 68/68.
+>
+> **Bootloader (recursive `$(MAKE)`):** the migrate command now detects it and
+> points to the declarative replacement — a `sub-build` step embedding a nested
+> `bootldr` configuration as a `.binboot` blob. The sub-build mechanism is
+> validated end to end (host loader: blob + `_binary_*` symbols, incremental). A
+> complete ARM bootloader *image* additionally needs a project board target (the
+> clock/platform header, e.g. `MONO_FREQUENCY`) and bootloader application code,
+> neither of which ships in the upstream lib — that's project content, not a tool
+> gap.
 
 ## Why
 
