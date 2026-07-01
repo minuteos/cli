@@ -14,6 +14,7 @@ public sealed class BuildEngine
     private readonly ILogger _logger;
     private readonly int _parallelism;
     private readonly IFingerprinter _fingerprinter;
+    private readonly object _sync = new(); // guards pool / cache / seen across concurrent steps
 
     public BuildEngine(Toolchain toolchain, ILogger logger, int parallelism = 0, IFingerprinter? fingerprinter = null)
     {
@@ -60,32 +61,40 @@ public sealed class BuildEngine
         // the step's inputs are materialized).
         var pool = new List<Artifact>();
 
-        foreach (var step in ordered.Where(s => !IsAugmenter(s)))
+        // Step-level scheduling in dependency waves: independent steps (e.g.
+        // disassembly/objcopy/size after link, or a sub-build alongside compiles)
+        // run concurrently. A shared gate caps total concurrent actions; shared
+        // state (pool/cache/seen) is mutated under a lock.
+        var mainSteps = ordered.Where(s => !IsAugmenter(s)).ToList();
+        var indegree = mainSteps.ToDictionary(s => s, _ => 0);
+        var successors = mainSteps.ToDictionary(s => s, _ => new List<IGraphStep>());
+        foreach (var producer in mainSteps)
+            foreach (var consumer in mainSteps)
+                if (!ReferenceEquals(producer, consumer) && Produces(producer, consumer))
+                {
+                    successors[producer].Add(consumer);
+                    indegree[consumer]++;
+                }
+
+        using var actionGate = new SemaphoreSlim(_parallelism);
+        var stepDone = new HashSet<IGraphStep>();
+        while (stepDone.Count < mainSteps.Count)
         {
-            var inputs = pool.Where(a => step.Signature.Consumes.Any(a.Matches)).ToList();
+            var wave = mainSteps.Where(s => !stepDone.Contains(s) && indegree[s] == 0).ToList();
+            if (wave.Count == 0)
+                throw new InvalidOperationException("Build step graph has a cycle.");
 
-            var planContext = new PlanContext
-            {
-                Config = config,
-                Settings = settings,
-                Toolchain = _toolchain,
-                Logger = _logger,
-                Inputs = inputs,
-            };
-
-            List<BuildAction> actions;
-            try
-            {
-                actions = step.Plan(planContext).ToList();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError("Step '{Step}' failed to plan: {Message}", step.Name, ex.Message);
+            var results = await Task.WhenAll(wave.Select(step =>
+                RunStepAsync(step, config, settings, pool, cache, seen, actionContext, actionGate)));
+            if (results.Any(ok => !ok))
                 return false;
-            }
 
-            if (!await RunStepActionsAsync(actions, pool, cache, seen, actionContext))
-                return false;
+            foreach (var step in wave)
+            {
+                stepDone.Add(step);
+                foreach (var consumer in successors[step])
+                    indegree[consumer]--;
+            }
         }
 
         // Drop vanished actions, delete their orphaned outputs, persist the cache.
@@ -101,16 +110,48 @@ public sealed class BuildEngine
     }
 
     /// <summary>
+    /// Plans a step (snapshotting the pool for its inputs under the lock) and runs
+    /// its actions. Called concurrently for independent steps in a wave.
+    /// </summary>
+    private async Task<bool> RunStepAsync(
+        IGraphStep step, BuildConfiguration config, Settings settings, List<Artifact> pool,
+        BuildCache cache, HashSet<string> seen, ActionContext actionContext, SemaphoreSlim gate)
+    {
+        List<Artifact> inputs;
+        lock (_sync)
+            inputs = pool.Where(a => step.Signature.Consumes.Any(a.Matches)).ToList();
+
+        var planContext = new PlanContext
+        {
+            Config = config,
+            Settings = settings,
+            Toolchain = _toolchain,
+            Logger = _logger,
+            Inputs = inputs,
+        };
+
+        List<BuildAction> actions;
+        try { actions = step.Plan(planContext).ToList(); }
+        catch (Exception ex)
+        {
+            _logger.LogError("Step '{Step}' failed to plan: {Message}", step.Name, ex.Message);
+            return false;
+        }
+
+        return await RunStepActionsAsync(actions, pool, cache, seen, actionContext, gate);
+    }
+
+    /// <summary>
     /// Runs a step's actions in dependency waves: actions whose intra-step inputs
-    /// are all satisfied run together, capped at the parallelism limit. This keeps
-    /// ordering (e.g. PCH before the compiles that -include it) while running the
-    /// independent compiles concurrently. Cache checks and pool/cache mutation
-    /// happen single-threaded between waves; only the action Run bodies run in
-    /// parallel, so no shared state is touched concurrently.
+    /// are all satisfied run together, capped by the shared <paramref name="gate"/>.
+    /// This keeps ordering (e.g. PCH before the compiles that -include it) while
+    /// running independent compiles concurrently. Only the action Run bodies run in
+    /// parallel; cache/pool/seen mutations are serialized under the lock, so this is
+    /// safe to call concurrently for independent steps.
     /// </summary>
     private async Task<bool> RunStepActionsAsync(
         List<BuildAction> actions, List<Artifact> pool, BuildCache cache,
-        HashSet<string> seen, ActionContext actionContext)
+        HashSet<string> seen, ActionContext actionContext, SemaphoreSlim gate)
     {
         // Intra-step producer map: which action in this step produces each artifact.
         var producedHere = new Dictionary<string, BuildAction>(StringComparer.Ordinal);
@@ -130,23 +171,25 @@ public sealed class BuildEngine
             if (ready.Count == 0)
                 throw new InvalidOperationException("Cycle among a step's actions.");
 
-            // Cache check (single-threaded); collect the ones that actually run.
+            // Cache check (under lock); collect the ones that actually run.
             var toRun = new List<BuildAction>();
-            foreach (var action in ready)
+            lock (_sync)
             {
-                seen.Add(action.Label);
-                if (!action.AlwaysRun && cache.IsUpToDate(action, action.ConfigKey))
+                foreach (var action in ready)
                 {
-                    pool.AddRange(action.Outputs);
-                    continue;
+                    seen.Add(action.Label);
+                    if (!action.AlwaysRun && cache.IsUpToDate(action, action.ConfigKey))
+                    {
+                        pool.AddRange(action.Outputs);
+                        continue;
+                    }
+                    foreach (var output in action.Outputs)
+                        EnsureDirectory(output.Id);
+                    toRun.Add(action);
                 }
-                foreach (var output in action.Outputs)
-                    EnsureDirectory(output.Id);
-                toRun.Add(action);
             }
 
-            // Run this wave concurrently (only the Run bodies; cap concurrency).
-            using var gate = new SemaphoreSlim(_parallelism);
+            // Run this wave concurrently (only the Run bodies; shared concurrency cap).
             var results = await Task.WhenAll(toRun.Select(async action =>
             {
                 await gate.WaitAsync(actionContext.CancellationToken);
@@ -154,16 +197,19 @@ public sealed class BuildEngine
                 finally { gate.Release(); }
             }));
 
-            // Apply results (single-threaded): fail fast, record, publish.
-            foreach (var (action, result) in results)
+            // Apply results (under lock): fail fast, record, publish.
+            lock (_sync)
             {
-                if (result == null || !result.Success)
+                foreach (var (action, result) in results)
                 {
-                    _logger.LogError("Action '{Label}' failed: {Message}", action.Label, result?.Message ?? "threw");
-                    return false;
+                    if (result == null || !result.Success)
+                    {
+                        _logger.LogError("Action '{Label}' failed: {Message}", action.Label, result?.Message ?? "threw");
+                        return false;
+                    }
+                    cache.Record(action, result, action.ConfigKey);
+                    pool.AddRange(result.ProducedArtifacts ?? action.Outputs);
                 }
-                cache.Record(action, result, action.ConfigKey);
-                pool.AddRange(result.ProducedArtifacts ?? action.Outputs);
             }
 
             foreach (var a in ready)
