@@ -14,13 +14,15 @@ toolchain-agnostic; the gcc steps read the `gcc.*` keys.
 ```yaml
 name: my-project
 
-# External dependencies (git submodules / repos providing lib roots).
-# See docs/dependencies.md; restored by `minuteos restore`.
+# External dependencies providing lib roots. Three kinds: reference a `path`,
+# fetch a commit `tar`ball into a cache, or `git`-clone. See docs/dependencies.md;
+# restored by `minuteos restore`.
 dependencies:
   - name: lib
-    git: https://github.com/minuteos/lib
+    path: ../shared/lib               # existing dir (submodule)
   - name: lib-arm
     git: https://github.com/minuteos/lib-arm
+    commit: 0a1b2c3d                    # tarball into cache
 
 # Optional defaults inherited by every configuration.
 defaults:

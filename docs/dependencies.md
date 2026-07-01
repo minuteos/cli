@@ -18,27 +18,45 @@ found and the build fails with an "unknown target/component" error.
 
 ## Declaring dependencies
 
-Declare external dependencies in `minuteos.yaml` so the tool can restore them:
+Declare external dependencies in `minuteos.yaml`. Each resolves to a directory
+that becomes a lib root — the directory does **not** have to live in the project
+root or be named `lib*`. There are three kinds, cheapest first:
 
 ```yaml
-name: my-firmware
-
 dependencies:
+  # 1. path - reference an existing directory (a submodule checked out here or
+  #    shared elsewhere). Nothing is fetched.
   - name: lib
-    git: https://github.com/minuteos/lib
+    path: ../shared/lib
+
+  # 2. tar - fetch a specific commit's tarball into a shared cache. No .git, no
+  #    full clone; content-addressed by commit, shared across projects.
   - name: lib-arm
     git: https://github.com/minuteos/lib-arm
-    ref: main            # optional branch/tag/commit
+    commit: 0a1b2c3d
+    # or an explicit tarball:  tar: https://.../lib-arm-<sha>.tar.gz
 
-configurations:
-  qemu:
-    target: qemu-arm
-    components: [kernel]
+  # 3. clone - a full git clone into the project.
+  - name: lib-vendor
+    git: https://example.com/vendor/lib
+    ref: main            # optional branch/tag/commit
 ```
 
-Each dependency resolves to a directory (`path`, else `name`) under the project
-root. Because discovery keys off the `lib*` prefix, name your lib dependencies
-accordingly (`lib`, `lib-arm`, `lib-vendor`, ...).
+- **path** — the fastest option: point at a directory you already have (an
+  initialized submodule, or a shared checkout). `restore` only verifies it
+  exists.
+- **tar** — avoids full clones and submodule history: `restore` downloads the
+  commit tarball (GitHub `codeload`, or the generic `<url>/archive/<commit>.tar.gz`,
+  or an explicit `tar:` URL / local `.tar.gz`) and extracts it into a cache.
+  Because it is keyed by commit, several projects share one copy and nothing is
+  re-fetched.
+- **clone** — a plain `git clone` into `./<name>`.
+
+### The tarball cache
+
+Tarballs extract to a shared cache — `$MINUTEOS_CACHE`, or `~/.cache/minuteos/deps`
+by default — under `<name>/<commit>/`. It is content-addressed, so a dependency
+already cached is reported `cached` and never re-downloaded.
 
 ## Restoring
 
@@ -50,12 +68,12 @@ minuteos restore
 
 1. runs `git submodule update --init --recursive` if the project has a
    `.gitmodules` (initializing lib submodules), then
-2. **clones** any declared dependency that is still missing and has a `git:` URL
-   (checking out `ref` if given).
+2. resolves each declared dependency by its kind — verifies a **path**, fetches a
+   **tar**ball into the cache, or **clone**s.
 
-It is idempotent — dependencies already present are reported as `present`. A
-dependency that is missing and has no `git:` URL is flagged (initialize its
-submodule manually).
+It is idempotent — a path/clone already present is `present`, a cached tarball is
+`cached`, nothing is re-fetched. A **path** dependency whose directory is missing
+is flagged (initialize its submodule / provide the directory).
 
 `build`/`test`/`run` warn when a declared dependency directory is missing or
 empty and point you at `minuteos restore`.

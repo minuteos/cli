@@ -15,17 +15,22 @@ public class ProjectLayout
     public IReadOnlyList<string> LibRoots { get; }
     public IReadOnlyList<string> TargetRoots { get; }
 
-    public ProjectLayout(string projectRoot, string? name = null)
+    public ProjectLayout(string projectRoot, string? name = null, IEnumerable<string>? extraLibRoots = null)
     {
         ProjectRoot = Path.GetFullPath(projectRoot);
         Name = name ?? Path.GetFileName(ProjectRoot);
         SourceDir = Path.Combine(ProjectRoot, "src");
 
-        LibRoots = Directory.Exists(ProjectRoot)
-            ? Directory.GetDirectories(ProjectRoot, "lib*")
-                .Where(Directory.Exists)
-                .ToList()
+        // Lib roots: lib* dirs in the project root (usually submodules), plus any
+        // declared-dependency dirs (which may live in a cache or outside the root).
+        var roots = Directory.Exists(ProjectRoot)
+            ? Directory.GetDirectories(ProjectRoot, "lib*").Where(Directory.Exists).Select(Path.GetFullPath).ToList()
             : [];
+        if (extraLibRoots != null)
+            foreach (var r in extraLibRoots.Where(Directory.Exists).Select(Path.GetFullPath))
+                if (!roots.Contains(r))
+                    roots.Add(r);
+        LibRoots = roots;
 
         var targetRoots = new List<string>();
         foreach (var root in new[] { ProjectRoot }.Concat(LibRoots))

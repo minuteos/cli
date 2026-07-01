@@ -47,6 +47,32 @@ public class DependencyTests : IDisposable
         Assert.Equal("main", project.Dependencies[1].Ref);
     }
 
+    [Theory]
+    [InlineData(null, null, null, "d", DependencyKind.Path)]     // path set
+    [InlineData("x", "abc", null, null, DependencyKind.Tar)]     // git + commit
+    [InlineData(null, null, "t.tgz", null, DependencyKind.Tar)]  // explicit tar
+    [InlineData("x", null, null, null, DependencyKind.Clone)]    // git only
+    public void Kind_IsInferredFromFields(string? git, string? commit, string? tar, string? path, DependencyKind expected)
+    {
+        var dep = new Dependency { Name = "lib", Git = git, Commit = commit, Tar = tar, Path = path };
+        Assert.Equal(expected, dep.Kind);
+    }
+
+    [Fact]
+    public void ResolveDir_ByKind()
+    {
+        var root = "/proj";
+        Assert.Equal(Path.GetFullPath("/proj/../shared/lib"),
+            DependencyRestorer.ResolveDir(new Dependency { Name = "lib", Path = "../shared/lib" }, root));
+        Assert.Equal(Path.Combine(root, "lib"),
+            DependencyRestorer.ResolveDir(new Dependency { Name = "lib", Git = "u" }, root));
+
+        var tar = DependencyRestorer.ResolveDir(
+            new Dependency { Name = "lib", Git = "u", Commit = "abc123" }, root);
+        Assert.StartsWith(DependencyRestorer.CacheRoot, tar);
+        Assert.EndsWith(Path.Combine("lib", "abc123"), tar);   // cache keyed by commit
+    }
+
     [Fact]
     public void MissingDependencies_ReportsAbsentAndEmptyDirs()
     {

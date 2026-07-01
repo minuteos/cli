@@ -107,7 +107,9 @@ public class BuildConfiguration : IBuildConfiguration
         ProjectConfig projectConfig, string configName, string projectRoot, BuildOverrides? overrides = null)
     {
         var profile = projectConfig.Resolve(configName);
-        var layout = new ProjectLayout(projectRoot, projectConfig.Name);
+        var depRoots = (projectConfig.Dependencies ?? [])
+            .Select(d => DependencyRestorer.ResolveDir(d, projectRoot));
+        var layout = new ProjectLayout(projectRoot, projectConfig.Name, depRoots);
 
         var primaryTarget = profile.Target ?? "host";
         var config = profile.Config ?? "Release";
