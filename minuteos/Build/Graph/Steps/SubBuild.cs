@@ -31,32 +31,49 @@ public sealed class SubBuildStep(IReadOnlyDictionary<string, string> config) : I
         var projectRoot = ctx.Config.Layout.ProjectRoot;
         var blobObj = Path.Combine(ctx.Config.ObjectDir, subName + ".blob.o");
 
-        yield return new BuildAction($"sub-build:{subName}", [], [Artifact.File(blobObj, ("kind", "object"))], async actx =>
+        BuildConfiguration? sub = null;
+        string? loadError = null;
+        try
         {
-            ProjectConfig projectConfig;
-            BuildConfiguration sub;
-            try
-            {
-                projectConfig = ProjectConfig.Load(projectRoot);
-                sub = BuildConfiguration.Create(projectConfig, subName, projectRoot,
-                    new BuildOverrides { OutputSubdir = Path.Combine("sub", subName) });
-            }
-            catch (Exception ex)
-            {
-                return ActionResult.Fail($"sub-build '{subName}': {ex.Message}");
-            }
+            sub = BuildConfiguration.Create(ProjectConfig.Load(projectRoot), subName, projectRoot,
+                new BuildOverrides { OutputSubdir = Path.Combine("sub", subName) });
+        }
+        catch (Exception ex)
+        {
+            loadError = ex.Message;
+        }
 
+        if (sub == null)
+        {
+            yield return new BuildAction($"sub-build:{subName}", [], [],
+                _ => Task.FromResult(ActionResult.Fail($"sub-build '{subName}': {loadError}")));
+            yield break;
+        }
+
+        var subImage = Artifact.File(sub.PrimaryOutput, ("kind", "sub-image"));
+        var subBin = Path.Combine(Path.GetDirectoryName(sub.PrimaryOutput)!, subName + ".bin");
+
+        // Action 1: build the sub-config as a nested graph (its own cache). Always
+        // runs, but is cheap when the nested build is up to date.
+        yield return new BuildAction($"sub-build:{subName}/build", [], [subImage], async actx =>
+        {
             if (!actx.Quiet)
                 actx.Logger.LogInformation("  sub-build: {Config}", subName);
-
-            // Nested graph build (has its own cache under out/<sub>/.cache).
             var subToolchain = new Toolchain(sub.Settings.Scalar("gcc.toolchain-prefix") ?? "", actx.Logger);
             if (!await GraphRunner.BuildAsync(sub, subToolchain, actx.Logger, actx.CancellationToken, quiet: true))
                 return ActionResult.Fail($"sub-build '{subName}' failed");
+            return ActionResult.Ok();
+        })
+        {
+            AlwaysRun = true,
+        };
 
-            // Image -> raw binary -> blob object. Name the .bin after the sub-config
-            // so the objcopy symbols are _binary_<config>_bin_start/_end/_size.
-            var subBin = Path.Combine(Path.GetDirectoryName(sub.PrimaryOutput)!, subName + ".bin");
+        // Action 2: embed the image as a blob object. Cache-gated on the sub image,
+        // so an unchanged sub-build doesn't re-objcopy or force a parent relink.
+        // Naming the .bin after the sub-config gives clean _binary_<config>_bin_*
+        // symbols.
+        yield return new BuildAction($"sub-build:{subName}/embed", [subImage], [Artifact.File(blobObj, ("kind", "object"))], async actx =>
+        {
             var toBin = await actx.Toolchain.RunToolAsync(actx.Toolchain.ObjCopy,
                 ["-O", "binary", sub.PrimaryOutput, subBin], projectRoot, actx.CancellationToken);
             if (!toBin.Success)
@@ -74,7 +91,7 @@ public sealed class SubBuildStep(IReadOnlyDictionary<string, string> config) : I
             return ActionResult.Ok();
         })
         {
-            AlwaysRun = true,
+            ConfigKey = $"{format} {arch} {section}",
         };
     }
 }
