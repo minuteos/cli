@@ -39,9 +39,9 @@ public sealed record StepSignature(
 /// <summary>Context handed to <see cref="IGraphStep.Plan"/>.</summary>
 public sealed class PlanContext
 {
-    public required BuildConfiguration Config { get; init; }
+    public required IBuildConfiguration Config { get; init; }
     public required Settings Settings { get; init; }
-    public required Toolchain Toolchain { get; init; }
+    public required IToolchain Toolchain { get; init; }
     public required ILogger Logger { get; init; }
 
     /// <summary>The materialized artifacts matching this step's consume selectors.</summary>
@@ -51,7 +51,7 @@ public sealed class PlanContext
 /// <summary>Context handed to a <see cref="BuildAction"/> when it runs.</summary>
 public sealed class ActionContext
 {
-    public required Toolchain Toolchain { get; init; }
+    public required IToolchain Toolchain { get; init; }
     public required ILogger Logger { get; init; }
     public required string ProjectRoot { get; init; }
     public required bool Quiet { get; init; }

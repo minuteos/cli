@@ -13,7 +13,7 @@ internal static class GccFlags
     /// Pure over its inputs (the graph compile step and PCH share it).
     /// </summary>
     public static void AppendCompileFlags(
-        List<string> args, Settings s, BuildConfiguration config,
+        List<string> args, Settings s, IBuildConfiguration config,
         IEnumerable<string> extraDefines, IEnumerable<string> extraIncludeDirs,
         string sourceDir, SourceLanguage language)
     {

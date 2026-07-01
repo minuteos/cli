@@ -21,7 +21,7 @@ public sealed class GccScanStep : IGraphStep
     public IEnumerable<BuildAction> Plan(PlanContext ctx)
     {
         var sources = new SourceCollector()
-            .CollectSources(ctx.Config.SourceDirs, ctx.Config.Layout.ProjectRoot)
+            .CollectSources(ctx.Config.SourceDirs, ctx.Config.ProjectRoot)
             .Select(f => Artifact.File(f.FullPath, ("kind", "source"), ("lang", Lang(f.Language))))
             .ToList();
 
@@ -73,7 +73,7 @@ public sealed class GccCompileStep : IGraphStep
     {
         var config = ctx.Config;
         var settings = ctx.Settings;
-        var projectRoot = config.Layout.ProjectRoot;
+        var projectRoot = config.ProjectRoot;
 
         // Generated header dirs (e.g. a transpiler's) join the -I path.
         var extraIncludes = ctx.Inputs.Where(a => a.Kind == "header-dir").Select(a => a.Id).ToList();
@@ -176,8 +176,8 @@ public sealed class GccLinkStep : IGraphStep
             args.AddRange(["-L", ResolveLinkDir(dir, config)]);
 
         var libDirs = config.TargetDirs.Concat(config.ComponentDirs);
-        if (Directory.Exists(config.Layout.SourceDir))
-            libDirs = new[] { config.Layout.SourceDir }.Concat(libDirs);
+        if (Directory.Exists(config.SourceDir))
+            libDirs = new[] { config.SourceDir }.Concat(libDirs);
         foreach (var dir in libDirs)
             args.AddRange(["-L", dir]);
 
@@ -206,7 +206,7 @@ public sealed class GccLinkStep : IGraphStep
     /// relative to the target/component dir it was declared in; resolve it against
     /// those dirs. Absolute paths pass through.
     /// </summary>
-    private static string ResolveLinkDir(string dir, BuildConfiguration config)
+    private static string ResolveLinkDir(string dir, IBuildConfiguration config)
     {
         if (Path.IsPathRooted(dir))
             return dir;

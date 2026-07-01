@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/MinuteOS.Build.Abstractions/MinuteOS.Build.Abstractions.csproj" />
     <Project Path="src/MinuteOS.Build/MinuteOS.Build.csproj" />
     <Project Path="src/MinuteOS.Cli/MinuteOS.Cli.csproj" />
   </Folder>

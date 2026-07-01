@@ -21,7 +21,7 @@ public sealed class GitVersionStep(IReadOnlyDictionary<string, string> config) :
 
     public IEnumerable<BuildAction> Plan(PlanContext ctx)
     {
-        var projectRoot = ctx.Config.Layout.ProjectRoot;
+        var projectRoot = ctx.Config.ProjectRoot;
         var tagPattern = config.GetValueOrDefault("tag-pattern", "v*");
 
         yield return new BuildAction("git-version", [], [], async actx =>

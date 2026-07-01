@@ -28,7 +28,7 @@ public sealed class SubBuildStep(IReadOnlyDictionary<string, string> config) : I
         var section = config.GetValueOrDefault("blob-section", ".rodata");
         var format = config.GetValueOrDefault("blob-format", "elf32-littlearm");
         var arch = config.GetValueOrDefault("blob-arch", "arm");
-        var projectRoot = ctx.Config.Layout.ProjectRoot;
+        var projectRoot = ctx.Config.ProjectRoot;
         var blobObj = Path.Combine(ctx.Config.ObjectDir, subName + ".blob.o");
 
         BuildConfiguration? sub = null;

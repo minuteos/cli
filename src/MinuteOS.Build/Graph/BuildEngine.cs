@@ -38,7 +38,7 @@ public sealed class BuildEngine
         {
             Toolchain = _toolchain,
             Logger = _logger,
-            ProjectRoot = config.Layout.ProjectRoot,
+            ProjectRoot = config.ProjectRoot,
             Quiet = quiet,
             CancellationToken = cancellationToken,
         };

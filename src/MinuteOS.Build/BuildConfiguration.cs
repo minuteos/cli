@@ -7,7 +7,7 @@ namespace MinuteOS.Build;
 /// Represents the fully resolved build configuration for a minuteos project.
 /// Merges contributions from: project config, target metadata, and component metadata.
 /// </summary>
-public class BuildConfiguration
+public class BuildConfiguration : IBuildConfiguration
 {
     public required string Name { get; init; }
     public required ProjectLayout Layout { get; init; }
@@ -15,10 +15,16 @@ public class BuildConfiguration
     public required string Config { get; init; }
     public required List<string> Targets { get; init; }
     public required List<string> Components { get; init; }
-    public required List<string> TargetDirs { get; init; }
-    public required List<string> ComponentDirs { get; init; }
+    public required IReadOnlyList<string> TargetDirs { get; init; }
+    public required IReadOnlyList<string> ComponentDirs { get; init; }
     public required List<string> IncludeDirs { get; init; }
-    public required List<string> SourceDirs { get; init; }
+    public required IReadOnlyList<string> SourceDirs { get; init; }
+
+    /// <summary>Project root (from the layout); part of the <see cref="IBuildConfiguration"/> surface.</summary>
+    public string ProjectRoot => Layout.ProjectRoot;
+
+    /// <summary>Primary source dir (from the layout).</summary>
+    public string SourceDir => Layout.SourceDir;
     public required List<SourceFile> Sources { get; init; }
     public required List<string> Defines { get; init; }
     public required ConfigurationProfile Profile { get; init; }

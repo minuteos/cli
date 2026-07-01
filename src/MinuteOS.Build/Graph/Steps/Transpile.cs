@@ -56,7 +56,7 @@ public sealed class TranspileStep : IGraphStep
             yield break;
 
         var generatedDir = Path.Combine(ctx.Config.OutputRoot, "generated", "cs");
-        var projectRoot = ctx.Config.Layout.ProjectRoot;
+        var projectRoot = ctx.Config.ProjectRoot;
 
         // Whole-program: always runs (its produced set isn't known until it runs);
         // write-if-changed keeps downstream compiles incremental, and the recorded

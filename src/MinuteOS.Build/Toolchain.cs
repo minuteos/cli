@@ -4,10 +4,9 @@ using Microsoft.Extensions.Logging;
 namespace MinuteOS.Build;
 
 /// <summary>
-/// GCC-based toolchain for compiling minuteos projects.
-/// Compiler flags are driven by the configuration profile.
+/// GCC-based <see cref="IToolchain"/>: program names + process execution.
 /// </summary>
-public class Toolchain
+public class Toolchain : IToolchain
 {
     private readonly ILogger _logger;
     public string Prefix { get; }
@@ -88,9 +87,4 @@ public class Toolchain
             stderr,
             $"{program} {argString}");
     }
-}
-
-public record CompilationResult(int ExitCode, string StdOut, string StdErr, string Command)
-{
-    public bool Success => ExitCode == 0;
 }

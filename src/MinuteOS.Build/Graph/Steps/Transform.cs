@@ -31,7 +31,7 @@ public sealed class TransformStep(IReadOnlyDictionary<string, string> config) : 
         var id = config.GetValueOrDefault("id", "transform");
         var generatedDir = Path.Combine(ctx.Config.OutputRoot, "generated", id);
         var manifestPath = Path.Combine(generatedDir, ".manifest.json");
-        var projectRoot = ctx.Config.Layout.ProjectRoot;
+        var projectRoot = ctx.Config.ProjectRoot;
 
         var inputs = TransformSupport.DiscoverInputs(ctx.Config.SourceDirs, inputsPattern);
         if (inputs.Count == 0)
@@ -98,7 +98,7 @@ public sealed class TransformStep(IReadOnlyDictionary<string, string> config) : 
     }
 
     private static string Substitute(
-        string template, BuildConfiguration c, IReadOnlyList<string> inputs, string generatedDir, string manifest)
+        string template, IBuildConfiguration c, IReadOnlyList<string> inputs, string generatedDir, string manifest)
     {
         string Quote(string s) => s.Contains(' ') ? $"\"{s}\"" : s;
         return template
