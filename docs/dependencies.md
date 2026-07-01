@@ -72,6 +72,10 @@ Why restore-time resolution rather than per-build: resolving on every build woul
 add a network round-trip to each build and let inputs move mid-project; and an
 offline fallback would be needed anyway — which is exactly the lock.
 
+**Avoiding lock files entirely:** pin every remote dependency to a commit SHA.
+The lock only exists to make mutable refs safe — a project with only
+commit-pinned (or path) dependencies never produces a `minuteos.lock` at all.
+
 ## Restoring
 
 ```bash
