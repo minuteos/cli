@@ -12,7 +12,8 @@ public static class GraphRunner
 {
     public static async Task<bool> BuildAsync(
         BuildConfiguration config, Toolchain toolchain, ILogger logger,
-        CancellationToken cancellationToken, int parallelism = 0, bool quiet = false)
+        CancellationToken cancellationToken, int parallelism = 0, bool quiet = false,
+        IFingerprinter? fingerprinter = null)
     {
         if (!quiet)
         {
@@ -43,7 +44,7 @@ public static class GraphRunner
                 logger.LogWarning("Step '{Name}' is not yet ported to the graph engine; skipping.", stepRef.Name);
         }
 
-        var engine = new BuildEngine(toolchain, logger, parallelism);
+        var engine = new BuildEngine(toolchain, logger, parallelism, fingerprinter);
         var ok = await engine.RunAsync(steps, config, cancellationToken, quiet);
 
         if (ok && !quiet)

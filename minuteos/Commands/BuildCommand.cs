@@ -16,6 +16,9 @@ public class BuildCommand : LoggingCommand
     [Option("--project", "-p", Description = "Project root directory")]
     public string? ProjectDir { get; set; }
 
+    [Option("--hash", Description = "Use content-hash fingerprints (mtime+size by default)")]
+    public bool Hash { get; set; }
+
     public async Task<int> ExecuteAsync(CancellationToken cancellationToken)
     {
         var projectRoot = ProjectConfig.GetProjectRoot(ProjectDir);
@@ -63,7 +66,8 @@ public class BuildCommand : LoggingCommand
             var toolchain = new Toolchain(config.Settings.Scalar("gcc.toolchain-prefix") ?? "", Logger);
             var parallelism = Jobs > 0 ? Jobs : Environment.ProcessorCount;
 
-            if (!await GraphRunner.BuildAsync(config, toolchain, Logger, cancellationToken, parallelism))
+            IFingerprinter? fingerprinter = Hash ? new ContentHashFingerprinter() : null;
+            if (!await GraphRunner.BuildAsync(config, toolchain, Logger, cancellationToken, parallelism, fingerprinter: fingerprinter))
                 success = false;
 
             Logger.LogInformation("");

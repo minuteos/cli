@@ -13,12 +13,14 @@ public sealed class BuildEngine
     private readonly Toolchain _toolchain;
     private readonly ILogger _logger;
     private readonly int _parallelism;
+    private readonly IFingerprinter _fingerprinter;
 
-    public BuildEngine(Toolchain toolchain, ILogger logger, int parallelism = 0)
+    public BuildEngine(Toolchain toolchain, ILogger logger, int parallelism = 0, IFingerprinter? fingerprinter = null)
     {
         _toolchain = toolchain;
         _logger = logger;
         _parallelism = parallelism > 0 ? parallelism : Environment.ProcessorCount;
+        _fingerprinter = fingerprinter ?? new MtimeSizeFingerprinter();
     }
 
     public async Task<bool> RunAsync(
@@ -28,7 +30,7 @@ public sealed class BuildEngine
         bool quiet = false)
     {
         var ordered = TopologicalOrder(steps);
-        var cache = BuildCache.Load(Path.Combine(config.OutputRoot, ".cache"));
+        var cache = BuildCache.Load(Path.Combine(config.OutputRoot, ".cache"), _fingerprinter);
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
         var actionContext = new ActionContext

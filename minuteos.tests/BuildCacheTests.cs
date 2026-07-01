@@ -2,6 +2,37 @@ using MinuteOS.Cli.Build.Graph;
 
 namespace MinuteOS.Cli.Tests;
 
+public class FingerprinterTests : IDisposable
+{
+    private readonly string _f;
+    public FingerprinterTests()
+    {
+        _f = Path.Combine(Path.GetTempPath(), $"minuteos-fp-{Guid.NewGuid():N}.bin");
+        File.WriteAllText(_f, "hello");
+    }
+    public void Dispose() { if (File.Exists(_f)) File.Delete(_f); }
+
+    [Fact]
+    public void ContentHash_Ignores_Mtime_But_Sees_Content()
+    {
+        var fp = new ContentHashFingerprinter();
+        var a = fp.Compute(_f);
+        File.SetLastWriteTimeUtc(_f, DateTime.UtcNow.AddHours(1)); // touch, same content
+        Assert.Equal(a, fp.Compute(_f));                          // content hash unchanged
+        File.WriteAllText(_f, "world");
+        Assert.NotEqual(a, fp.Compute(_f));                       // content changed
+    }
+
+    [Fact]
+    public void MtimeSize_Sees_Mtime()
+    {
+        var fp = new MtimeSizeFingerprinter();
+        var a = fp.Compute(_f);
+        File.SetLastWriteTimeUtc(_f, DateTime.UtcNow.AddHours(1));
+        Assert.NotEqual(a, fp.Compute(_f));
+    }
+}
+
 /// <summary>
 /// Covers the action cache: skip-when-unchanged, removed-input detection (the
 /// declared-input set must match), config-change detection, and orphan tracking.

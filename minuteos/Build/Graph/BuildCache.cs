@@ -23,15 +23,17 @@ public sealed class BuildCache
     private readonly string _path;
     private readonly Dictionary<string, Entry> _entries;
     private readonly List<string> _previousOutputs;
+    private readonly IFingerprinter _fingerprinter;
 
-    private BuildCache(string path, Dictionary<string, Entry> entries)
+    private BuildCache(string path, Dictionary<string, Entry> entries, IFingerprinter fingerprinter)
     {
         _path = path;
         _entries = entries;
+        _fingerprinter = fingerprinter;
         _previousOutputs = entries.Values.SelectMany(e => e.Outputs).Distinct().ToList();
     }
 
-    public static BuildCache Load(string cacheDir)
+    public static BuildCache Load(string cacheDir, IFingerprinter? fingerprinter = null)
     {
         var path = Path.Combine(cacheDir, "actions.json");
         Dictionary<string, Entry>? entries = null;
@@ -40,7 +42,7 @@ public sealed class BuildCache
             try { entries = JsonSerializer.Deserialize<Dictionary<string, Entry>>(File.ReadAllText(path)); }
             catch { /* corrupt cache - rebuild from scratch */ }
         }
-        return new BuildCache(path, entries ?? []);
+        return new BuildCache(path, entries ?? [], fingerprinter ?? new MtimeSizeFingerprinter());
     }
 
     /// <summary>True when the action can be skipped: same config, all outputs present,
@@ -59,7 +61,7 @@ public sealed class BuildCache
             return false;
 
         foreach (var (path, fingerprint) in e.Inputs)
-            if (!File.Exists(path) || Fingerprint(path) != fingerprint)
+            if (!File.Exists(path) || _fingerprinter.Compute(path) != fingerprint)
                 return false;
 
         return true;
@@ -72,7 +74,7 @@ public sealed class BuildCache
         var inputs = declared.Concat(deps)
             .Where(p => IsFile(p) && File.Exists(p))
             .Distinct(StringComparer.Ordinal)
-            .ToDictionary(p => p, Fingerprint);
+            .ToDictionary(p => p, _fingerprinter.Compute);
         var outputs = (result.ProducedArtifacts ?? action.Outputs)
             .Select(a => a.Id).Where(IsFile).Distinct().ToList();
 
@@ -97,12 +99,6 @@ public sealed class BuildCache
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
         File.WriteAllText(_path, JsonSerializer.Serialize(_entries, new JsonSerializerOptions { WriteIndented = true }));
-    }
-
-    private static string Fingerprint(string path)
-    {
-        var fi = new FileInfo(path);
-        return $"{fi.LastWriteTimeUtc.Ticks}:{fi.Length}";
     }
 
     // A real filesystem path (not a "value:..." logical artifact).
