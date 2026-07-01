@@ -366,16 +366,52 @@ correctness if it ever goes stale.
 
 The build system uses GCC's `-MMD -MP` flags to generate dependency files. On subsequent builds, it parses these `.d` files to check if any included header has changed, rebuilding only affected translation units.
 
+## Repository layout
+
+```
+src/
+  MinuteOS.Build.Abstractions   # contracts for consumers & extensions
+  MinuteOS.Build                # the build system (engine, gcc bundle, steps, MEDI)
+  MinuteOS.Cli                  # the minimal CLI exe
+tests/
+  MinuteOS.Build.Tests
+```
+
+The build system is a library, independent of the CLI.
+
+## Using the build system programmatically
+
+Reference `MinuteOS.Build` and drive a build through DI — no CLI required:
+
+```csharp
+using Microsoft.Extensions.DependencyInjection;
+using MinuteOS.Build;
+
+var provider = new ServiceCollection()
+    .AddLogging()
+    .AddMinuteosBuild()
+    .BuildServiceProvider();
+
+var runner  = provider.GetRequiredService<IBuildRunner>();
+var project = ProjectConfig.Load(projectRoot);
+var config  = BuildConfiguration.Create(project, "host", projectRoot);
+
+await runner.BuildAsync(config, new BuildOptions { Parallelism = 8 });
+```
+
+To add a **custom build step**, reference only `MinuteOS.Build.Abstractions` and
+implement `IGraphStep` (declare what it consumes/produces by artifact properties;
+expand into `BuildAction`s). See `docs/design/task-graph.md`.
+
 ## Building from Source
 
 ```bash
-cd minuteos
-dotnet build
-dotnet run -- --help
+dotnet build                 # builds the solution (MinuteOS.slnx)
+dotnet run --project src/MinuteOS.Cli -- --help
 ```
 
 ## Running Tests
 
 ```bash
-dotnet test minuteos.tests
+dotnet test
 ```
