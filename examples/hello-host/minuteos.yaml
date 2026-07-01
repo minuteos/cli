@@ -1,0 +1,6 @@
+name: hello
+
+configurations:
+  host:
+    target: host
+    components: []

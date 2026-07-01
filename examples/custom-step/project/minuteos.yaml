@@ -1,0 +1,9 @@
+name: app
+configurations:
+  host:
+    target: host
+    components: []
+    steps:
+      - name: build-info
+        config:
+          note: "hello from a custom step"

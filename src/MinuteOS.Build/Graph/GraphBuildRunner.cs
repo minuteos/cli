@@ -10,8 +10,14 @@ namespace MinuteOS.Build.Graph;
 public sealed class GraphBuildRunner : IBuildRunner
 {
     private readonly ILogger<GraphBuildRunner> _logger;
+    private readonly IReadOnlyDictionary<string, IBuildStepFactory> _stepFactories;
 
-    public GraphBuildRunner(ILogger<GraphBuildRunner> logger) => _logger = logger;
+    public GraphBuildRunner(ILogger<GraphBuildRunner> logger, IEnumerable<IBuildStepFactory> stepFactories)
+    {
+        _logger = logger;
+        // Last registration for a name wins.
+        _stepFactories = stepFactories.GroupBy(f => f.Name).ToDictionary(g => g.Key, g => g.Last());
+    }
 
     public Task<bool> BuildAsync(
         IBuildConfiguration config, BuildOptions? options = null, CancellationToken cancellationToken = default)
@@ -24,6 +30,6 @@ public sealed class GraphBuildRunner : IBuildRunner
         var toolchain = new Toolchain(config.Settings.Scalar("gcc.toolchain-prefix") ?? "", _logger);
         return GraphRunner.BuildAsync(
             concrete, toolchain, _logger, cancellationToken,
-            options.Parallelism, options.Quiet, options.Fingerprinter);
+            options.Parallelism, options.Quiet, options.Fingerprinter, _stepFactories);
     }
 }

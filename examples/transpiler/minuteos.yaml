@@ -1,0 +1,11 @@
+name: transpiler-demo
+
+configurations:
+  host:
+    target: host
+    components: []
+    steps:
+      # Turns *.cs into generated C++ before compilation. The built-in transpile
+      # step is a stub that emits a marker per input; a real C#->C++ transpiler
+      # plugs in here (in-process) with the same contract.
+      - name: transpile

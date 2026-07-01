@@ -13,7 +13,8 @@ public static class GraphRunner
     public static async Task<bool> BuildAsync(
         BuildConfiguration config, Toolchain toolchain, ILogger logger,
         CancellationToken cancellationToken, int parallelism = 0, bool quiet = false,
-        IFingerprinter? fingerprinter = null)
+        IFingerprinter? fingerprinter = null,
+        IReadOnlyDictionary<string, IBuildStepFactory>? stepFactories = null)
     {
         if (!quiet)
         {
@@ -37,11 +38,16 @@ public static class GraphRunner
         // out-of-graph (run/test invoke them). Not-yet-ported steps are skipped.
         foreach (var stepRef in config.StepRefs)
         {
-            var graphStep = MapConfiguredStep(stepRef);
+            var cfg = stepRef.Config ?? new Dictionary<string, string>();
+            // Consumer-registered steps win over the built-ins, letting a project
+            // override or extend the catalog.
+            var graphStep = stepFactories != null && stepFactories.TryGetValue(stepRef.Name, out var factory)
+                ? factory.Create(cfg)
+                : MapConfiguredStep(stepRef);
             if (graphStep != null)
                 steps.Add(graphStep);
             else if (stepRef.Phase != MinuteOS.Build.Steps.BuildPhase.Run && !RunStepNames.Contains(stepRef.Name))
-                logger.LogWarning("Step '{Name}' is not yet ported to the graph engine; skipping.", stepRef.Name);
+                logger.LogWarning("Unknown build step '{Name}'; skipping.", stepRef.Name);
         }
 
         var engine = new BuildEngine(toolchain, logger, parallelism, fingerprinter);
