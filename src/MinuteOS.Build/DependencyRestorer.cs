@@ -7,12 +7,12 @@ using Microsoft.Extensions.Logging;
 namespace MinuteOS.Build;
 
 /// <summary>
-/// Restores a project's external dependencies. Three kinds (see
-/// <see cref="Dependency"/>): reference an existing <c>path</c>, fetch a commit
-/// <c>tar</c>ball into a shared cache, or full <c>clone</c>. Also initializes git
-/// submodules. Lib roots for the build come from
-/// <see cref="ResolveDir"/> of each dependency plus any <c>lib*</c> dirs in the
-/// project root.
+/// Restores a project's external dependencies (see <see cref="Dependency"/>):
+/// initializes git submodules, verifies <c>path</c> dependencies, and fetches
+/// <c>remote</c> dependencies as commit tarballs into a shared cache - never a
+/// full clone. Mutable refs (branch/tag) are resolved to a commit via
+/// <c>git ls-remote</c> at restore time and recorded in <see cref="DependencyLock"/>,
+/// so builds are offline and deterministic between restores.
 /// </summary>
 public static partial class DependencyRestorer
 {
@@ -23,22 +23,41 @@ public static partial class DependencyRestorer
         Environment.GetEnvironmentVariable("MINUTEOS_CACHE")
         ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cache", "minuteos", "deps");
 
+    private const string Unresolved = "_unresolved_";
+
     private static readonly HttpClient Http = new();
 
-    /// <summary>The on-disk directory a dependency resolves to (used as a lib root).</summary>
-    public static string ResolveDir(Dependency dep, string projectRoot) => dep.Kind switch
+    /// <summary>
+    /// The on-disk directory a dependency resolves to (used as a lib root).
+    /// Mutable-ref remotes resolve through the lock file; before the first
+    /// restore they point at a non-existent placeholder (=> reported missing).
+    /// </summary>
+    public static string ResolveDir(Dependency dep, string projectRoot)
     {
-        DependencyKind.Path => Path.GetFullPath(
-            Path.IsPathRooted(dep.Path!) ? dep.Path! : Path.Combine(projectRoot, dep.Path!)),
-        DependencyKind.Tar => Path.Combine(CacheRoot, Sanitize(dep.Directory), CacheKey(dep)),
-        _ => Path.Combine(projectRoot, dep.Directory),
-    };
+        if (dep.Kind == DependencyKind.Path)
+        {
+            var dir = dep.Path ?? dep.Name!;
+            return Path.GetFullPath(Path.IsPathRooted(dir) ? dir : Path.Combine(projectRoot, dir));
+        }
+        return Path.Combine(CacheRoot, Sanitize(dep.Directory), CacheKey(dep, projectRoot));
+    }
+
+    private static string CacheKey(Dependency dep, string projectRoot)
+    {
+        if (!string.IsNullOrEmpty(dep.Tar))
+            return Sanitize(dep.Tar);
+        if (dep.RefIsCommit)
+            return dep.Ref!;
+        return DependencyLock.Load(projectRoot).Get(dep.Directory) ?? Unresolved;
+    }
 
     public static async Task<IReadOnlyList<DependencyResult>> RestoreAsync(
         ProjectConfig project, string projectRoot, ILogger logger, CancellationToken cancellationToken)
     {
         var results = new List<DependencyResult>();
+        var locks = DependencyLock.Load(projectRoot);
 
+        // Path dependencies are typically submodules - initialize them first.
         if (File.Exists(Path.Combine(projectRoot, ".gitmodules")))
         {
             logger.LogInformation("Initializing git submodules...");
@@ -50,41 +69,11 @@ public static partial class DependencyRestorer
         foreach (var dep in project.Dependencies ?? [])
         {
             var name = dep.Directory;
-            var dir = ResolveDir(dep, projectRoot);
-
-            if (IsPopulated(dir))
-            {
-                results.Add(new(name, dep.Kind == DependencyKind.Tar ? "cached" : "present", true));
-                continue;
-            }
-
             try
             {
-                switch (dep.Kind)
-                {
-                    case DependencyKind.Path:
-                        // Nothing to fetch - the directory must be provided (e.g. an
-                        // uninitialized submodule).
-                        results.Add(new(name, $"missing path: {dir}", false));
-                        break;
-
-                    case DependencyKind.Tar:
-                        var url = TarUrl(dep);
-                        logger.LogInformation("Fetching {Name} tarball <- {Url}", name, url);
-                        await FetchTarballAsync(url, dir, cancellationToken);
-                        results.Add(new(name, "cached", true));
-                        break;
-
-                    default:
-                        logger.LogInformation("Cloning {Name} <- {Git}", name, dep.Git);
-                        var args = new List<string> { "clone" };
-                        if (!string.IsNullOrEmpty(dep.Ref))
-                            args.AddRange(["--branch", dep.Ref]);
-                        args.AddRange([dep.Git!, dir]);
-                        var (ok, _, err) = await GitAsync(projectRoot, args, cancellationToken);
-                        results.Add(new(name, ok ? "cloned" : $"clone failed: {err.Trim()}", ok));
-                        break;
-                }
+                results.Add(dep.Kind == DependencyKind.Path
+                    ? RestorePath(dep, projectRoot)
+                    : await RestoreRemoteAsync(dep, locks, logger, cancellationToken));
             }
             catch (Exception ex)
             {
@@ -92,7 +81,63 @@ public static partial class DependencyRestorer
             }
         }
 
+        locks.Save();
         return results;
+    }
+
+    private static DependencyResult RestorePath(Dependency dep, string projectRoot)
+    {
+        var dir = ResolveDir(dep, projectRoot);
+        return IsPopulated(dir)
+            ? new(dep.Directory, "present", true)
+            : new(dep.Directory, $"missing: {dir} (initialize the submodule / provide the directory)", false);
+    }
+
+    private static async Task<DependencyResult> RestoreRemoteAsync(
+        Dependency dep, DependencyLock locks, ILogger logger, CancellationToken cancellationToken)
+    {
+        var name = dep.Directory;
+
+        // Determine the cache key: explicit tarball, pinned commit, or a mutable
+        // ref resolved via ls-remote (falling back to the lock when offline).
+        string key;
+        string note = "";
+        if (!string.IsNullOrEmpty(dep.Tar))
+        {
+            key = Sanitize(dep.Tar);
+        }
+        else if (dep.RefIsCommit)
+        {
+            key = dep.Ref!;
+        }
+        else
+        {
+            var resolved = await LsRemoteAsync(dep.Git!, dep.Ref, cancellationToken);
+            if (resolved != null)
+            {
+                locks.Set(name, resolved);
+                key = resolved;
+                note = $"{dep.Ref ?? "HEAD"} -> {Short(resolved)}";
+            }
+            else if (locks.Get(name) is { } locked)
+            {
+                key = locked;
+                note = $"offline - using locked {Short(locked)}";
+            }
+            else
+            {
+                return new(name, $"cannot resolve ref '{dep.Ref ?? "HEAD"}' of {dep.Git}", false);
+            }
+        }
+
+        var dir = Path.Combine(CacheRoot, Sanitize(name), key);
+        if (IsPopulated(dir))
+            return new(name, Join("cached", note), true);
+
+        var url = TarUrl(dep, key);
+        logger.LogInformation("Fetching {Name} tarball <- {Url}", name, url);
+        await FetchTarballAsync(url, dir, cancellationToken);
+        return new(name, Join("fetched", note), true);
     }
 
     /// <summary>Declared dependencies whose resolved directory is absent or empty.</summary>
@@ -104,7 +149,7 @@ public static partial class DependencyRestorer
 
     // --- tarball fetch ---------------------------------------------------------
 
-    private static string TarUrl(Dependency dep)
+    private static string TarUrl(Dependency dep, string commit)
     {
         if (!string.IsNullOrEmpty(dep.Tar))
             return dep.Tar;
@@ -115,15 +160,15 @@ public static partial class DependencyRestorer
 
         var gh = GitHubRegex().Match(git);
         if (gh.Success)
-            return $"https://codeload.github.com/{gh.Groups[1].Value}/{gh.Groups[2].Value}/tar.gz/{dep.Commit}";
+            return $"https://codeload.github.com/{gh.Groups[1].Value}/{gh.Groups[2].Value}/tar.gz/{commit}";
 
-        return $"{git}/archive/{dep.Commit}.tar.gz"; // GitLab / Gitea style
+        return $"{git}/archive/{commit}.tar.gz"; // GitLab / Gitea style
     }
 
     private static async Task FetchTarballAsync(string url, string destDir, CancellationToken cancellationToken)
     {
         // Extract into a temp dir then move, so a failure never leaves a partial
-        // cache entry. GitHub tarballs nest under "<repo>-<ref>/"; strip that.
+        // cache entry. Archive entries nest under "<repo>-<ref>/"; strip that.
         var tmp = destDir + ".tmp-" + Guid.NewGuid().ToString("N")[..8];
         Directory.CreateDirectory(tmp);
         try
@@ -163,14 +208,42 @@ public static partial class DependencyRestorer
         }
     }
 
+    // --- ref resolution ---------------------------------------------------------
+
+    /// <summary>
+    /// Resolves a branch/tag (or HEAD when null) to a commit via
+    /// <c>git ls-remote</c> - a single cheap request, no clone. Annotated tags
+    /// prefer the peeled (<c>^{}</c>) commit. Null when unreachable/unknown.
+    /// </summary>
+    private static async Task<string?> LsRemoteAsync(string url, string? refName, CancellationToken cancellationToken)
+    {
+        var args = refName == null
+            ? new List<string> { "ls-remote", url, "HEAD" }
+            : ["ls-remote", url, refName, refName + "^{}"];
+
+        var (ok, output, _) = await GitAsync(Environment.CurrentDirectory, args, cancellationToken);
+        if (!ok)
+            return null;
+
+        var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(l => l.Split('\t'))
+            .Where(p => p.Length == 2)
+            .ToList();
+
+        // Peeled tag first (the commit an annotated tag points at), else the first match.
+        var peeled = lines.FirstOrDefault(p => p[1].EndsWith("^{}", StringComparison.Ordinal));
+        return (peeled ?? lines.FirstOrDefault())?[0];
+    }
+
+    private static string Short(string commit) => commit.Length > 8 ? commit[..8] : commit;
+
+    private static string Join(string a, string b) => b.Length == 0 ? a : $"{a} ({b})";
+
     private static string StripTopSegment(string name)
     {
         var idx = name.IndexOf('/');
         return idx < 0 ? "" : name[(idx + 1)..];
     }
-
-    private static string CacheKey(Dependency dep) =>
-        !string.IsNullOrEmpty(dep.Commit) ? dep.Commit : Sanitize(dep.Tar ?? "tar");
 
     private static string Sanitize(string s) =>
         new(s.Select(c => char.IsLetterOrDigit(c) || c is '-' or '.' ? c : '_').ToArray());

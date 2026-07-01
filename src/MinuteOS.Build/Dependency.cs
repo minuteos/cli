@@ -2,61 +2,59 @@ namespace MinuteOS.Build;
 
 /// <summary>
 /// An external dependency providing a lib root (e.g. <c>lib</c>, <c>lib-arm</c>).
-/// Three kinds, cheapest first:
+/// Two kinds:
 ///
-///   # 1. path - point at an existing directory (a submodule checked out here or
-///   #    shared elsewhere). Nothing is fetched.
+///   # 1. path - an existing directory, typically a git submodule. Git pins the
+///   #    version; `restore` initializes submodules. `path` defaults to `name`.
 ///   - name: lib
+///   - name: lib-shared
 ///     path: ../shared/lib
 ///
-///   # 2. tar - fetch a specific commit's tarball into a shared cache (no .git,
-///   #    no full clone; content-addressed by commit).
+///   # 2. remote - fetched as a commit tarball into a shared cache (never a full
+///   #    clone). `ref` is a commit SHA, branch, or tag (default: HEAD). Mutable
+///   #    refs are resolved to a commit at restore time and recorded in
+///   #    minuteos.lock; builds are offline.
 ///   - name: lib-arm
 ///     git: https://github.com/minuteos/lib-arm
-///     commit: 0a1b2c3...
-///
-///   # 3. clone - a full git clone into the project.
-///   - name: lib
-///     git: https://github.com/minuteos/lib
 ///     ref: main
 /// </summary>
 public class Dependency
 {
-    /// <summary>Directory name / identity (also the default <see cref="Directory"/>).</summary>
+    /// <summary>Dependency identity; also the default directory for path deps.</summary>
     public string? Name { get; set; }
 
-    /// <summary>Kind 1: an existing directory (relative to the project root, or absolute).</summary>
+    /// <summary>Path kind: the directory (relative to the project root, or absolute). Defaults to <see cref="Name"/>.</summary>
     public string? Path { get; set; }
 
-    /// <summary>Clone URL (kind 2 with <see cref="Commit"/>, or kind 3).</summary>
+    /// <summary>Remote kind: the repository URL (fetched as a tarball, never cloned).</summary>
     public string? Git { get; set; }
 
-    /// <summary>Kind 2: the commit to fetch as a tarball (content-addressed cache key).</summary>
-    public string? Commit { get; set; }
-
-    /// <summary>Kind 2 (explicit): a tarball URL or local <c>.tar.gz</c> path.</summary>
-    public string? Tar { get; set; }
-
-    /// <summary>Kind 3: branch/tag/commit to check out when cloning.</summary>
+    /// <summary>Remote kind: commit SHA, branch, or tag (default: HEAD).</summary>
     public string? Ref { get; set; }
 
-    /// <summary>The dependency's identity for cache keys and clone dirs.</summary>
+    /// <summary>Remote kind (explicit): a tarball URL or local <c>.tar.gz</c> path.</summary>
+    public string? Tar { get; set; }
+
+    /// <summary>The dependency's identity (for cache keys, the lock file, and messages).</summary>
     public string Directory => Name ?? Path ?? throw new InvalidOperationException("dependency has no name or path");
 
     public DependencyKind Kind =>
-        !string.IsNullOrEmpty(Path) ? DependencyKind.Path
-        : !string.IsNullOrEmpty(Tar) || (!string.IsNullOrEmpty(Git) && !string.IsNullOrEmpty(Commit)) ? DependencyKind.Tar
-        : DependencyKind.Clone;
+        !string.IsNullOrEmpty(Git) || !string.IsNullOrEmpty(Tar) ? DependencyKind.Remote : DependencyKind.Path;
+
+    /// <summary>
+    /// True when <see cref="Ref"/> is an (abbreviated) commit SHA - immutable, so it
+    /// is its own cache key and needs no resolution. Anything else (branch, tag) is
+    /// mutable and resolved to a commit at restore time.
+    /// </summary>
+    public bool RefIsCommit =>
+        Ref is { Length: >= 7 and <= 40 } r && r.All(Uri.IsHexDigit);
 }
 
 public enum DependencyKind
 {
-    /// <summary>Reference an existing directory.</summary>
+    /// <summary>An existing directory (typically a submodule).</summary>
     Path,
 
-    /// <summary>Fetch a commit tarball into a shared cache.</summary>
-    Tar,
-
-    /// <summary>Full git clone into the project.</summary>
-    Clone,
+    /// <summary>Fetched as a commit tarball into the shared cache.</summary>
+    Remote,
 }

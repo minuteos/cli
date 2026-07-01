@@ -14,15 +14,16 @@ toolchain-agnostic; the gcc steps read the `gcc.*` keys.
 ```yaml
 name: my-project
 
-# External dependencies providing lib roots. Three kinds: reference a `path`,
-# fetch a commit `tar`ball into a cache, or `git`-clone. See docs/dependencies.md;
-# restored by `minuteos restore`.
+# External dependencies providing lib roots. Two kinds: an existing directory
+# (typically a submodule; `path` defaults to `name`), or a remote fetched as a
+# commit tarball into a shared cache (never cloned). `ref` = commit | branch |
+# tag; mutable refs are locked in minuteos.lock at restore time.
+# See docs/dependencies.md; restored by `minuteos restore`.
 dependencies:
-  - name: lib
-    path: ../shared/lib               # existing dir (submodule)
+  - name: lib                           # submodule at ./lib
   - name: lib-arm
     git: https://github.com/minuteos/lib-arm
-    commit: 0a1b2c3d                    # tarball into cache
+    ref: main                           # tarball into cache, locked on restore
 
 # Optional defaults inherited by every configuration.
 defaults:

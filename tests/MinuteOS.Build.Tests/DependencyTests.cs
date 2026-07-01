@@ -48,29 +48,51 @@ public class DependencyTests : IDisposable
     }
 
     [Theory]
-    [InlineData(null, null, null, "d", DependencyKind.Path)]     // path set
-    [InlineData("x", "abc", null, null, DependencyKind.Tar)]     // git + commit
-    [InlineData(null, null, "t.tgz", null, DependencyKind.Tar)]  // explicit tar
-    [InlineData("x", null, null, null, DependencyKind.Clone)]    // git only
-    public void Kind_IsInferredFromFields(string? git, string? commit, string? tar, string? path, DependencyKind expected)
+    [InlineData(null, null, "d", null, DependencyKind.Path)]      // explicit path
+    [InlineData(null, null, null, null, DependencyKind.Path)]     // name only (submodule dir)
+    [InlineData("x", "main", null, null, DependencyKind.Remote)]  // git + branch
+    [InlineData("x", null, null, null, DependencyKind.Remote)]    // git, default HEAD
+    [InlineData(null, null, null, "t.tgz", DependencyKind.Remote)] // explicit tarball
+    public void Kind_IsInferredFromFields(string? git, string? @ref, string? path, string? tar, DependencyKind expected)
     {
-        var dep = new Dependency { Name = "lib", Git = git, Commit = commit, Tar = tar, Path = path };
+        var dep = new Dependency { Name = "lib", Git = git, Ref = @ref, Tar = tar, Path = path };
         Assert.Equal(expected, dep.Kind);
+    }
+
+    [Theory]
+    [InlineData("0a1b2c3d", true)]                             // short sha
+    [InlineData("0123456789abcdef0123456789abcdef01234567", true)] // full sha
+    [InlineData("main", false)]
+    [InlineData("v1.2.3", false)]
+    [InlineData(null, false)]                                  // default HEAD
+    public void RefIsCommit_ClassifiesRefs(string? @ref, bool isCommit)
+    {
+        Assert.Equal(isCommit, new Dependency { Name = "l", Git = "u", Ref = @ref }.RefIsCommit);
     }
 
     [Fact]
     public void ResolveDir_ByKind()
     {
-        var root = "/proj";
+        // path: explicit dir, or name as the dir (a submodule).
         Assert.Equal(Path.GetFullPath("/proj/../shared/lib"),
-            DependencyRestorer.ResolveDir(new Dependency { Name = "lib", Path = "../shared/lib" }, root));
-        Assert.Equal(Path.Combine(root, "lib"),
-            DependencyRestorer.ResolveDir(new Dependency { Name = "lib", Git = "u" }, root));
+            DependencyRestorer.ResolveDir(new Dependency { Name = "lib", Path = "../shared/lib" }, "/proj"));
+        Assert.Equal(Path.Combine(Path.GetFullPath("/proj"), "lib"),
+            DependencyRestorer.ResolveDir(new Dependency { Name = "lib" }, "/proj"));
 
-        var tar = DependencyRestorer.ResolveDir(
-            new Dependency { Name = "lib", Git = "u", Commit = "abc123" }, root);
-        Assert.StartsWith(DependencyRestorer.CacheRoot, tar);
-        Assert.EndsWith(Path.Combine("lib", "abc123"), tar);   // cache keyed by commit
+        // remote pinned to a commit: cache keyed by the commit, no lock needed.
+        var pinned = DependencyRestorer.ResolveDir(
+            new Dependency { Name = "lib", Git = "u", Ref = "abc1234" }, _root);
+        Assert.StartsWith(DependencyRestorer.CacheRoot, pinned);
+        Assert.EndsWith(Path.Combine("lib", "abc1234"), pinned);
+
+        // remote on a branch: unresolved until restore writes the lock...
+        var dep = new Dependency { Name = "lib", Git = "u", Ref = "main" };
+        Assert.EndsWith("_unresolved_", DependencyRestorer.ResolveDir(dep, _root));
+
+        // ...then resolves through the locked commit.
+        File.WriteAllText(Path.Combine(_root, DependencyLock.FileName), "lib: fedcba9876543210\n");
+        Assert.EndsWith(Path.Combine("lib", "fedcba9876543210"),
+            DependencyRestorer.ResolveDir(dep, _root));
     }
 
     [Fact]

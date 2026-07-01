@@ -1,62 +1,76 @@
-# External dependencies (git submodules)
+# External dependencies
 
 A project pulls in library code — the minuteOS `lib` and `lib-arm` repos, and any
-other libraries — as **lib roots**: directories in the project root whose name
-starts with `lib` and that contain a `targets/` tree. Conventionally these are
-**git submodules**.
+other libraries — as **lib roots**: directories containing a `targets/` tree of
+components and targets.
 
 ## How the builder finds them
 
-`ProjectLayout` discovers every `lib*` directory in the project root and treats
-each one's `targets/` as a source of components and targets (alongside the
-project's own `targets/`). This is purely on-disk discovery — a `lib*` directory
-is used whether or not it is declared anywhere.
+`ProjectLayout` uses, as lib roots:
 
-The builder does **not** fetch anything on its own. If a submodule directory is
-empty (a fresh clone without `--recursive`), its components/targets simply aren't
-found and the build fails with an "unknown target/component" error.
+- every `lib*` directory in the project root (purely on-disk discovery — used
+  whether or not it is declared anywhere), and
+- the resolved directory of every **declared dependency** (which may live outside
+  the project root, e.g. in the tarball cache).
+
+The build itself never fetches anything. If a dependency directory is empty (an
+uninitialized submodule, an unfetched tarball), the build warns and points at
+`minuteos restore`.
 
 ## Declaring dependencies
 
-Declare external dependencies in `minuteos.yaml`. Each resolves to a directory
-that becomes a lib root — the directory does **not** have to live in the project
-root or be named `lib*`. There are three kinds, cheapest first:
+Two kinds:
 
 ```yaml
 dependencies:
-  # 1. path - reference an existing directory (a submodule checked out here or
-  #    shared elsewhere). Nothing is fetched.
+  # 1. path - an existing directory, typically a git submodule. Git pins the
+  #    version through the submodule; nothing is fetched. `path` defaults to
+  #    `name`, so a submodule at ./lib is just:
   - name: lib
+  # ...and a checkout shared between projects:
+  - name: lib-shared
     path: ../shared/lib
 
-  # 2. tar - fetch a specific commit's tarball into a shared cache. No .git, no
-  #    full clone; content-addressed by commit, shared across projects.
+  # 2. remote - fetched as a commit tarball into a shared cache. Never a full
+  #    clone, no .git, no history. `ref` is a commit SHA, branch, or tag
+  #    (default: HEAD).
   - name: lib-arm
     git: https://github.com/minuteos/lib-arm
-    commit: 0a1b2c3d
-    # or an explicit tarball:  tar: https://.../lib-arm-<sha>.tar.gz
-
-  # 3. clone - a full git clone into the project.
+    ref: main
+  # or an explicit tarball URL / local .tar.gz:
   - name: lib-vendor
-    git: https://example.com/vendor/lib
-    ref: main            # optional branch/tag/commit
+    tar: https://example.com/lib-vendor-1.2.tar.gz
 ```
 
-- **path** — the fastest option: point at a directory you already have (an
-  initialized submodule, or a shared checkout). `restore` only verifies it
-  exists.
-- **tar** — avoids full clones and submodule history: `restore` downloads the
-  commit tarball (GitHub `codeload`, or the generic `<url>/archive/<commit>.tar.gz`,
-  or an explicit `tar:` URL / local `.tar.gz`) and extracts it into a cache.
-  Because it is keyed by commit, several projects share one copy and nothing is
-  re-fetched.
-- **clone** — a plain `git clone` into `./<name>`.
+### path — submodules
 
-### The tarball cache
+A submodule is already version-pinned *by git*; the tool doesn't duplicate that.
+Declaring it gives you `restore` (which initializes submodules) and the
+missing-dependency warning. Any existing directory works, including ones outside
+the project.
 
-Tarballs extract to a shared cache — `$MINUTEOS_CACHE`, or `~/.cache/minuteos/deps`
-by default — under `<name>/<commit>/`. It is content-addressed, so a dependency
-already cached is reported `cached` and never re-downloaded.
+### remote — commit tarballs, `ref`, and the lock file
+
+A remote dependency is fetched as a **tarball of one commit** (GitHub `codeload`,
+the generic `<url>/archive/<commit>.tar.gz`, or an explicit `tar:`) into a shared
+content-addressed cache — `$MINUTEOS_CACHE`, default `~/.cache/minuteos/deps`,
+under `<name>/<commit>/`. Several projects share one copy; nothing is ever
+re-fetched.
+
+`ref` decides the version:
+
+- **commit SHA** (7–40 hex chars) — immutable: it is its own cache key; no
+  resolution, ever.
+- **branch / tag / absent (HEAD)** — mutable: `restore` resolves it to a commit
+  with `git ls-remote` (one cheap request, no clone) and records the result in
+  **`minuteos.lock`** next to `minuteos.yaml`. Builds read the lock — they are
+  offline and deterministic between restores. Re-running `restore` re-resolves,
+  i.e. moves you to the current branch head / tag target. Commit the lock file
+  for reproducible team builds (or ignore it to always float on restore).
+
+Why restore-time resolution rather than per-build: resolving on every build would
+add a network round-trip to each build and let inputs move mid-project; and an
+offline fallback would be needed anyway — which is exactly the lock.
 
 ## Restoring
 
@@ -64,30 +78,19 @@ already cached is reported `cached` and never re-downloaded.
 minuteos restore
 ```
 
-`restore`:
+1. Runs `git submodule update --init --recursive` if the project has a
+   `.gitmodules` (covers path dependencies that are submodules).
+2. Verifies each **path** dependency exists.
+3. For each **remote** dependency: resolves a mutable `ref` to a commit (updating
+   `minuteos.lock`), then fetches the commit tarball into the cache if not
+   already there. When the network is unavailable, a previously locked commit is
+   used (`offline - using locked <sha>`).
 
-1. runs `git submodule update --init --recursive` if the project has a
-   `.gitmodules` (initializing lib submodules), then
-2. resolves each declared dependency by its kind — verifies a **path**, fetches a
-   **tar**ball into the cache, or **clone**s.
-
-It is idempotent — a path/clone already present is `present`, a cached tarball is
-`cached`, nothing is re-fetched. A **path** dependency whose directory is missing
-is flagged (initialize its submodule / provide the directory).
-
-`build`/`test`/`run` warn when a declared dependency directory is missing or
-empty and point you at `minuteos restore`.
+Idempotent: `present` / `cached (main -> 0a1b2c3d)` on re-runs.
 
 ## Recommended workflow
 
-Add the libs as submodules once:
-
-```bash
-git submodule add https://github.com/minuteos/lib      lib
-git submodule add https://github.com/minuteos/lib-arm  lib-arm
-```
-
-Then on any fresh checkout, `minuteos restore` (or `git submodule update --init
---recursive`) makes the project buildable. Declaring the same repos under
-`dependencies:` lets `restore` also clone them on a checkout that didn't use
-submodules.
+- Libraries you also **edit** alongside the project: submodules —
+  `git submodule add … lib`, declare `- name: lib`, done.
+- Libraries you only **consume**: remote deps pinned to a commit (fully
+  reproducible with no lock), or on a branch/tag with `minuteos.lock` committed.
