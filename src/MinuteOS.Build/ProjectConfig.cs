@@ -14,6 +14,13 @@ public class ProjectConfig
     public string? Name { get; set; }
 
     /// <summary>
+    /// External dependencies (typically git submodules) providing lib roots such
+    /// as <c>lib</c> / <c>lib-arm</c>. Restored by <c>minuteos restore</c>; a lib
+    /// dir already present on disk is used whether or not it is declared here.
+    /// </summary>
+    public List<Dependency>? Dependencies { get; set; }
+
+    /// <summary>
     /// Default settings inherited by all configurations.
     /// </summary>
     public ConfigurationProfile Defaults { get; set; } = new();

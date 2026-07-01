@@ -34,6 +34,10 @@ public class BuildCommand : LoggingCommand
             return 1;
         }
 
+        var missing = DependencyRestorer.MissingDependencies(projectConfig, projectRoot);
+        if (missing.Count > 0)
+            Logger.LogWarning("Missing dependencies: {Deps}. Run 'minuteos restore'.", string.Join(", ", missing));
+
         // Determine which configurations to build
         var configNames = Configuration != ""
             ? [Configuration]

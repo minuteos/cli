@@ -60,6 +60,7 @@ minuteos run   -c host      # build, then execute
 | `run -c <cfg>` | Build, then execute the image — directly (host) or via the target's `run` step (emulator). |
 | `test [-c <cfg>]` | Discover and run test suites (`-f` filter cases, `-s` filter suites). |
 | `info [-c <cfg>]` | Show the resolved configuration (targets, components, settings). |
+| `restore` | Restore external dependencies (init git submodules, clone declared repos). |
 | `migrate` | Convert legacy Make `Include.mk` files to YAML. |
 | `new`, `init`, `clean` | Scaffold / initialize / clean. |
 

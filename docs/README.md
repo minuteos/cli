@@ -9,6 +9,8 @@ over the `MinuteOS.Build` library, so the same engine is usable programmatically
 - [Getting started](getting-started.md) — install, a first project, build/run/test.
 - [Configuration reference](configuration.md) — `minuteos.yaml`, `component.yaml`,
   `target.yaml`, and the settings bag.
+- [External dependencies](dependencies.md) — lib roots, git submodules, and
+  `minuteos restore`.
 - [The build model](build-model.md) — the task graph, **how dependencies work**,
   incremental builds, and the built-in step catalog.
 - [Writing a build step](writing-a-step.md) — the extension contract and how to

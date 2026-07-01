@@ -23,7 +23,9 @@ Resolved once, before the graph runs, into a `BuildConfiguration`:
   targets accumulate lists; the configuration overrides.
 
 This decides which sources are compiled and with what flags. It is **not**
-incremental tracking.
+incremental tracking. The components and targets themselves come from **lib
+roots** — `lib*` directories in the project root, usually git submodules; see
+[external dependencies](dependencies.md).
 
 ### 2. Artifact dependencies — *what must rebuild when a file changes*
 
