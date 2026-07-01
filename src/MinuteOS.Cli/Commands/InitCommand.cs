@@ -47,18 +47,15 @@ public class InitCommand : LoggingCommand
               # arm:
               #   target: cortex-m4
               #   config: Release
-              #   toolchain-prefix: arm-none-eabi-
-              #   arch-flags:
-              #     - -mcpu=cortex-m4
-              #     - -mthumb
-              #   link-flags:
-              #     - -T
-              #     - linker.ld
-              #     - --specs=nosys.specs
+              #   settings:
+              #     gcc.toolchain-prefix: arm-none-eabi-
+              #     gcc.arch-flags: [-mcpu=cortex-m4, -mthumb]
+              #     gcc.ld-script: linker.ld
+              #     gcc.link-flags: [--specs=nosys.specs]
               #   steps:
               #     - name: git-version
               #     - name: size-report
-              #     - name: binary-output
+              #     - name: gcc:objcopy
               #       config:
               #         formats: bin,hex
               #     - name: disassembly

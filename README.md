@@ -60,17 +60,14 @@ configurations:
 
   arm:
     target: cortex-m4
-    toolchain-prefix: arm-none-eabi-
-    arch-flags:
-      - -mcpu=cortex-m4
-      - -mthumb
-    ld-script: default.ld
-    primary-ext: .axf
-    link-flags:
-      - -nostartfiles
-      - -specs=nano.specs
+    settings:
+      gcc.toolchain-prefix: arm-none-eabi-
+      gcc.arch-flags: [-mcpu=cortex-m4, -mthumb]
+      gcc.ld-script: default.ld
+      gcc.primary-ext: .axf
+      gcc.link-flags: [-nostartfiles, -specs=nano.specs]
     steps:
-      - name: binary-output
+      - name: gcc:objcopy
         config:
           formats: bin,hex
 ```
@@ -79,19 +76,18 @@ Each named configuration inherits from `defaults` and can override any setting. 
 
 ### Configuration Fields
 
+Structure is typed; all toolchain configuration goes in the generic `settings`
+map (read by the gcc steps under `gcc.*` keys).
+
 | Field | Description |
 |-------|-------------|
 | `target` | Target platform name (resolves to `targets/<name>/` directories) |
 | `config` | Build config: `Release`, `Debug`, `Trace` |
 | `components` | List of components to build |
-| `toolchain-prefix` | GCC prefix (e.g. `arm-none-eabi-`) |
-| `arch-flags` | Architecture compiler/linker flags |
-| `c-flags` / `cxx-flags` | Extra C/C++ compiler flags |
-| `link-flags` | Extra linker flags |
 | `defines` | Extra preprocessor defines |
 | `include-dirs` | Extra include directories (relative to project root) |
-| `primary-ext` | Output extension (`.elf`, `.axf`) |
-| `ld-script` | Linker script filename (searched in target/component dirs) |
+| `source-dir` | Overrides the source root (default `src/`) |
+| `settings` | Toolchain settings, e.g. `gcc.toolchain-prefix`, `gcc.arch-flags`, `gcc.c-flags`/`gcc.cxx-flags`, `gcc.link-flags`, `gcc.link-dirs`, `gcc.ld-script`, `gcc.primary-ext` |
 | `steps` | Build steps to execute |
 
 ## Project Layout
@@ -148,10 +144,8 @@ Falls back to parsing `Include.mk` (`COMPONENTS += base`) for backwards compatib
 | `defines` | Preprocessor defines |
 | `include-dirs` | Additional include paths (relative to component dir) |
 | `source-dirs` | Additional source directories (supports glob patterns) |
-| `c-flags` / `cxx-flags` | Extra compiler flags |
-| `link-flags` | Extra linker flags |
+| `settings` | Toolchain settings (e.g. `gcc.cxx-flags`) |
 | `steps` | Build steps contributed by this component |
-| `exclude-sources` | Source file patterns to exclude |
 
 ## Target System
 
@@ -161,16 +155,13 @@ Targets define platform-specific settings. They can inherit from parent targets 
 # targets/cortex-m/target.yaml
 requires:
   - cmsis
-toolchain-prefix: arm-none-eabi-
-arch-flags:
-  - -mthumb
-primary-ext: .axf
-ld-script: default.ld
-link-flags:
-  - -nostartfiles
-  - -specs=nano.specs
-link-dirs:
-  - ld_fallbacks/
+settings:
+  gcc.toolchain-prefix: arm-none-eabi-
+  gcc.arch-flags: [-mthumb]
+  gcc.primary-ext: .axf
+  gcc.ld-script: default.ld
+  gcc.link-flags: [-nostartfiles, -specs=nano.specs]
+  gcc.link-dirs: [ld_fallbacks/]
 ```
 
 Target inheritance is resolved recursively. For example, `cortex-m4f` inherits from `cortex-m4`, which inherits from `cortex-m3`, which inherits from `cortex-m`.
@@ -178,7 +169,7 @@ Target inheritance is resolved recursively. For example, `cortex-m4f` inherits f
 When no `target.yaml` is present, the tool reads a legacy `Include.mk`, importing
 `TARGETS +=`, `COMPONENTS +=`, `TOOLCHAIN_PREFIX`, `ARCH_FLAGS`, `PRIMARY_EXT`,
 `LD_SCRIPT`, `LINK_FLAGS` (static tokens), `LINK_DIRS`, `DEFINES +=`, and the
-`TEST_RUN`/`TEST_RUN_ARGS` emulator invocation (as a `test-runner`). Values that
+`TEST_RUN`/`TEST_RUN_ARGS` emulator invocation (as a `run` step). Values that
 reference Make variables (`$(...)`) are skipped — the common exceptions are
 `LINK_DIRS`/`$(<NAME>_DIR)` (the target's own directory) and `$(TEST_FILTERS)`
 (mapped to `{filter}`). This is enough to build *and test* the real
@@ -193,7 +184,7 @@ Directory precedence is most-specific-first, so a target-specific header (e.g.
 `minuteos migrate` converts a project or lib's `Include.mk` files into native
 `component.yaml` / `target.yaml`, so Make can be removed entirely. It writes one
 YAML file per `Include.mk`, converts `objcopy`-based `binary`/`ihex`/`srec` rules
-into [`shell` steps](#the-shell-step), and flags anything genuinely
+into `gcc:objcopy` steps, and flags anything genuinely
 non-declarative (recursive bootloader builds, `run` targets) for manual porting.
 Use `-n`/`--dry-run` to preview, and `--delete-make` to remove each `Include.mk`
 that migrated with nothing left unhandled.
@@ -209,13 +200,11 @@ be deleted once migration is complete.
 
 ## Build Steps
 
-Steps run at specific phases of the build pipeline:
-
-| Phase | When | Example |
-|-------|------|---------|
-| `PreBuild` | Before compilation | Generate sources, extract version |
-| `PreLink` | After compilation, before linking | Modify objects |
-| `PostBuild` | After linking | Generate binary outputs, disassembly |
+The build is a task graph: steps declare what artifact kinds they consume and
+produce, and order themselves accordingly (a step consuming the linked image
+runs after link automatically). The `phase` field remains as YAML vocabulary —
+`Run` marks out-of-graph run steps; other phases are advisory. See
+[docs/build-model.md](docs/build-model.md).
 
 ### Built-in Steps
 
@@ -304,36 +293,41 @@ Options: `-c <config>`, `-s <substring>` (filter suites), `-f <substring>`
 
 ### Test runners (host, qemu, renode)
 
-Each configuration (or target) declares how to execute its test binaries. With no
-`test-runner`, the binary runs directly — that's the host case. For emulated
-targets, provide a runner command; `{binary}` and `{filter}` are substituted:
+Executing the image is a target-overridable `Run`-phase step. With no run step,
+the binary runs directly — that's the host case. For emulated targets, add a
+`qemu`/`renode`/`run` step; `{image}` and `{filter}` are substituted:
 
 ```yaml
 configurations:
-  # host: no test-runner needed, binaries run directly
+  # host: no run step needed, binaries run directly
 
   qemu:
     target: cortex-m3
-    test-runner:
-      command: qemu-system-arm
-      args: [-machine, lm3s6965evb, -nographic, -semihosting, -kernel, "{binary}"]
-      timeout: 60
+    steps:
+      - name: qemu
+        phase: Run
+        config:
+          args: '-machine lm3s6965evb -nographic -semihosting -kernel "{image}" -append "{filter}"'
+          timeout: "60"
 
   renode:
     target: cortex-m3
-    test-runner:
+    steps:
       # Renode drives a machine from a script; a small wrapper adapts it to the
-      # {binary} -> stdout contract. See examples/cortex-m3-qemu/renode.
-      command: examples/cortex-m3-qemu/renode/run.sh
-      args: ["{binary}"]
+      # {image} -> stdout contract. See examples/cortex-m3-qemu/renode.
+      - name: run
+        phase: Run
+        config:
+          command: examples/cortex-m3-qemu/renode/run.sh
+          args: '"{image}"'
 ```
 
-A target can also supply the runner (e.g. `targets/qemu-arm/target.yaml`), so any
-configuration using that target inherits it. The profile's runner takes precedence
-over the target's.
+A target can also supply the run step (e.g. `targets/qemu-arm/target.yaml`), so
+any configuration using that target inherits it; a config-level step overrides
+the target's.
 
 A complete, runnable Cortex-M3 + QEMU target (startup, linker script, semihosting,
-and the qemu `test-runner`) lives in [`examples/cortex-m3-qemu`](examples/cortex-m3-qemu).
+and the qemu `run` step) lives in [`examples/cortex-m3-qemu`](examples/cortex-m3-qemu).
 Dropping it into a project and running `minuteos test -c qemu` cross-compiles each
 suite with `arm-none-eabi-gcc`, runs it under `qemu-system-arm`, and reports results
 over semihosting.

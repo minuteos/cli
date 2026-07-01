@@ -55,10 +55,12 @@ public class NewCommand : LoggingCommand
               # Example emulator configuration (requires an ARM target + qemu):
               # qemu:
               #   target: cortex-m3
-              #   test-runner:
-              #     command: qemu-system-arm
-              #     args: [-machine, lm3s6965evb, -nographic, -semihosting, -kernel, "{binary}"]
-              #     timeout: 60
+              #   steps:
+              #     - name: qemu
+              #       phase: Run
+              #       config:
+              #         args: '-machine lm3s6965evb -nographic -semihosting -kernel "{image}"'
+              #         timeout: "60"
             """);
 
         // base component

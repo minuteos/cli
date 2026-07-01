@@ -86,6 +86,18 @@ link, or a sub-build alongside compiles), and independent **actions** within a
 step run concurrently (all the compiles), while ordering constraints (PCH before
 compiles) are respected.
 
+## IDE integration: compile_commands.json
+
+Every build writes a clangd-compatible compilation database with the **exact**
+command lines used to compile: `out/<config>/compile_commands.json`
+(write-if-changed, so IDE indexers only re-trigger when commands change). Point
+clangd at it with a `.clangd` file in the project root:
+
+```yaml
+CompileFlags:
+  CompilationDatabase: out/host
+```
+
 ## Built-in step catalog
 
 | Step | Consumes | Produces | Notes |

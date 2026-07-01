@@ -52,7 +52,8 @@ public class RunCommand : LoggingCommand
         // Build the primary output through the task-graph engine.
         var toolchain = new Toolchain(config.Settings.Scalar("gcc.toolchain-prefix") ?? "", Logger);
         var parallelism = Jobs > 0 ? Jobs : Environment.ProcessorCount;
-        if (!await MinuteOS.Build.Graph.GraphRunner.BuildAsync(config, toolchain, Logger, cancellationToken, parallelism))
+        if (!await MinuteOS.Build.Graph.GraphRunner.BuildAsync(config, toolchain, Logger,
+                new BuildOptions { Parallelism = parallelism }, cancellationToken: cancellationToken))
             return 1;
 
         // Launch it - directly for host, or via the configuration's run step (qemu/renode).

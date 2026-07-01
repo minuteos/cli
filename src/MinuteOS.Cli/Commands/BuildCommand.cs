@@ -70,8 +70,12 @@ public class BuildCommand : LoggingCommand
             var toolchain = new Toolchain(config.Settings.Scalar("gcc.toolchain-prefix") ?? "", Logger);
             var parallelism = Jobs > 0 ? Jobs : Environment.ProcessorCount;
 
-            IFingerprinter? fingerprinter = Hash ? new ContentHashFingerprinter() : null;
-            if (!await GraphRunner.BuildAsync(config, toolchain, Logger, cancellationToken, parallelism, fingerprinter: fingerprinter))
+            var options = new BuildOptions
+            {
+                Parallelism = parallelism,
+                Fingerprinter = Hash ? new ContentHashFingerprinter() : null,
+            };
+            if (!await GraphRunner.BuildAsync(config, toolchain, Logger, options, cancellationToken: cancellationToken))
                 success = false;
 
             Logger.LogInformation("");

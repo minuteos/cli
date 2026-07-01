@@ -12,10 +12,13 @@ public static class GraphRunner
 {
     public static async Task<bool> BuildAsync(
         BuildConfiguration config, Toolchain toolchain, ILogger logger,
-        CancellationToken cancellationToken, int parallelism = 0, bool quiet = false,
-        IFingerprinter? fingerprinter = null,
-        IReadOnlyDictionary<string, IBuildStepFactory>? stepFactories = null)
+        BuildOptions? options = null,
+        IReadOnlyDictionary<string, IBuildStepFactory>? stepFactories = null,
+        CancellationToken cancellationToken = default)
     {
+        options ??= new BuildOptions();
+        var quiet = options.Quiet;
+
         if (!quiet)
         {
             logger.LogInformation("Project:      {Name}", config.OutputName);
@@ -50,7 +53,7 @@ public static class GraphRunner
                 logger.LogWarning("Unknown build step '{Name}'; skipping.", stepRef.Name);
         }
 
-        var engine = new BuildEngine(toolchain, logger, parallelism, fingerprinter);
+        var engine = new BuildEngine(toolchain, logger, options.Parallelism, options.Fingerprinter);
         var ok = await engine.RunAsync(steps, config, cancellationToken, quiet);
 
         if (ok && !quiet)

@@ -177,7 +177,9 @@ public class TestCommand : LoggingCommand
         }
 
         var built = await MinuteOS.Build.Graph.GraphRunner.BuildAsync(
-            testConfig, toolchain, Logger, cancellationToken, parallelism, quiet: true);
+            testConfig, toolchain, Logger,
+            new BuildOptions { Parallelism = parallelism, Quiet = true },
+            cancellationToken: cancellationToken);
         if (!built)
         {
             Logger.LogError("  FAIL  {Suite}  (build failed)", suite.Id);

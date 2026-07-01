@@ -103,6 +103,8 @@ public sealed class GccCompileStep : IGraphStep
             };
         }
 
+        var compdb = new List<(string Program, List<string> Args, string File)>();
+
         foreach (var source in sources)
         {
             var lang = GccScanStep.Language(source.Properties.GetValueOrDefault("lang", "cpp"));
@@ -125,6 +127,8 @@ public sealed class GccCompileStep : IGraphStep
             }
             args.AddRange(["-o", objPath]);
 
+            compdb.Add((lang == SourceLanguage.C ? ctx.Toolchain.CC : ctx.Toolchain.CXX, args, sourcePath));
+
             yield return new BuildAction($"compile {rel}", inputs, [objArtifact], async actx =>
             {
                 if (!actx.Quiet)
@@ -140,6 +144,33 @@ public sealed class GccCompileStep : IGraphStep
                 ConfigKey = string.Join(' ', args),
             };
         }
+
+        // Emit a clangd-compatible compilation database with the EXACT command
+        // lines used to compile (out/<cfg>/compile_commands.json). Write-if-changed
+        // so IDE indexers only re-trigger when commands actually change.
+        var compdbPath = Path.Combine(config.OutputRoot, "compile_commands.json");
+        yield return new BuildAction("compile-commands", [], [Artifact.File(compdbPath, ("kind", "compdb"))], actx =>
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(
+                compdb.Select(e => new
+                {
+                    directory = projectRoot,
+                    arguments = (string[])[e.Program, .. e.Args],
+                    file = e.File,
+                }),
+                new System.Text.Json.JsonSerializerOptions
+                {
+                    WriteIndented = true,
+                    Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+                });
+
+            if (!File.Exists(compdbPath) || File.ReadAllText(compdbPath) != json)
+                File.WriteAllText(compdbPath, json);
+            return Task.FromResult(ActionResult.Ok());
+        })
+        {
+            AlwaysRun = true,
+        };
     }
 }
 

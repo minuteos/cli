@@ -60,7 +60,8 @@ public sealed class SubBuildStep(IReadOnlyDictionary<string, string> config) : I
             if (!actx.Quiet)
                 actx.Logger.LogInformation("  sub-build: {Config}", subName);
             var subToolchain = new Toolchain(sub.Settings.Scalar("gcc.toolchain-prefix") ?? "", actx.Logger);
-            if (!await GraphRunner.BuildAsync(sub, subToolchain, actx.Logger, actx.CancellationToken, quiet: true))
+            if (!await GraphRunner.BuildAsync(sub, subToolchain, actx.Logger,
+                    new BuildOptions { Quiet = true }, cancellationToken: actx.CancellationToken))
                 return ActionResult.Fail($"sub-build '{subName}' failed");
             return ActionResult.Ok();
         })

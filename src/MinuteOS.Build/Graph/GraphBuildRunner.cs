@@ -28,8 +28,6 @@ public sealed class GraphBuildRunner : IBuildRunner
 
         options ??= new BuildOptions();
         var toolchain = new Toolchain(config.Settings.Scalar("gcc.toolchain-prefix") ?? "", _logger);
-        return GraphRunner.BuildAsync(
-            concrete, toolchain, _logger, cancellationToken,
-            options.Parallelism, options.Quiet, options.Fingerprinter, _stepFactories);
+        return GraphRunner.BuildAsync(concrete, toolchain, _logger, options, _stepFactories, cancellationToken);
     }
 }
