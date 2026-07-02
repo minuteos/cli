@@ -14,7 +14,7 @@ over the `MinuteOS.Build` library, so the same engine is usable programmatically
 - [The build model](build-model.md) — the task graph, **how dependencies work**,
   incremental builds, and the built-in step catalog.
 - [Device management](device.md) — flash, erase, and debug via target-declared
-  probe commands.
+  probe commands; `minuteos dap` for editor/IDE debugging.
 - [Writing a build step](writing-a-step.md) — the extension contract and how to
   register a custom step.
 - [Using the library programmatically](programmatic.md) — drive builds via DI.
@@ -34,7 +34,8 @@ Runnable projects under [`../examples`](../examples):
 Background and rationale (how the current model was reached):
 
 - [`design/task-graph.md`](design/task-graph.md) — the opaque-artifact task graph.
-- [`design/debugger-integration.md`](design/debugger-integration.md) — the plan
-  for sharing one device/debug implementation with the minute-debug extension.
+- [`design/debugger-integration.md`](design/debugger-integration.md) — sharing
+  one device/debug implementation with the minute-debug extension
+  (`minuteos dap` and how it crosses the extension's in-process boundary).
 - [`design/generalized-spec.md`](design/generalized-spec.md) — the settings/steps
   groundwork it builds on.

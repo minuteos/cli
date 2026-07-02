@@ -1,7 +1,7 @@
 # Integrating the tool with minute-debug (no duplicated code)
 
-Status: **proposal**. Phase 1 is implemented; later phases need work in
-[minuteos/vs-debugger].
+Status: **phases 1 and 3 (core) are implemented in this repo**; the
+extension-side changes need work in [minuteos/vs-debugger].
 
 ## The problem
 
@@ -116,7 +116,58 @@ Port `gdb/mi*`, the server drivers, the SMU/SWO plumbing, and
 The extension drops to the frontend described above and its `src/` shrinks to
 UI + descriptor. From then on there is exactly one device/debug codebase.
 
-Until phase 3 lands, the CLI's `Bmp.cs`/`StlinkSmu.cs` and the extension's
+**Implemented (core).** `MinuteOS.Debug` now contains:
+
+- `Mi/MiParser` + `Mi/MiClient` — the GDB/MI layer (`gdb --interpreter=mi2`,
+  token-prefixed one-at-a-time commands, async record routing, per-thread
+  run-state tracking with awaitable stopped/not-stopped gates) — the port of
+  `gdb/mi.ts` + `gdb/instance.ts`.
+- `Servers/` — the `GdbServer` contract plus the qemu driver (spawns
+  `qemu-system-arm ... -gdb tcp:<port> -kernel <program> -S`, skipLoad) and the
+  BMP driver (serial-port autodetect, `monitor tpwr` / `swdp_scan` /
+  `attach 1` / `uid`) — the port of `gdb-server/`.
+- `Probe` — gdb + server started in parallel, `target-select extended-remote`,
+  attach, and the smart-load-aware `load` — the port of `probe/`.
+- `Dap/DapConnection` + `Dap/DebugSession` — the DAP server:
+  launch/attach (with `{config: name}` resolution through the build system),
+  breakpoints (source/instruction/exception via the Cortex-M DEMCR vector
+  catch), threads/stack/scopes, varobj-based locals/globals/expansion,
+  registers, evaluate (incl. `>console` and `-raw-mi` REPL passthrough),
+  stepping, pause, readMemory, and the stopped/continued/thread/output event
+  flow — the port of `debug-adapter/session.ts`.
+- `minuteos dap` — the whole thing over stdio (stdout is the protocol;
+  diagnostics go to stderr).
+
+The end-to-end flow is validated by `tests/dap-e2e/` — a Python DAP client
+driving `minuteos dap` against the `cortex-m3-qemu` example under
+`qemu-system-arm` (breakpoint hit, locals/globals/registers, evaluate, step,
+semihosting output as DAP output events, pause, clean teardown).
+
+**Not ported yet:** the Renode server driver (its monitor protocol +
+framebuffer/ITM plugins), SWO decoding, the SVD peripheral scopes, and the
+disassembly cache (`supportsDisassembleRequest` is off until then).
+
+## Crossing the in-process boundary
+
+The extension today runs its DAP session **in-process**
+(`DebugAdapterInlineImplementation`), which lets it call VS Code APIs directly
+from the session. Moving the session behind `minuteos dap` puts a process
+boundary there, so each of those direct calls needs a DAP-shaped path:
+
+| In-process use | Out-of-process path |
+|---|---|
+| `vscode.debug.activeDebugConsole.append(...)` (SWO ch0, console replies) | standard `output` events (already how `minuteos dap` forwards server/gdb output) |
+| `progress(...)` during load/flash | standard `progressStart`/`progressUpdate`/`progressEnd` events (the client advertises `supportsProgressReporting`) |
+| SVD tree view / peripheral UI | custom requests (`minuteos/svd`, ...) served by the adapter; the SVD cache moves to a filesystem cache shared by CLI and extension |
+| Renode framebuffer webview | already a socket side-channel today — the adapter just reports the endpoint in a custom event |
+| config expansion + presets | resolved inside the adapter (`{config: name}` → build system), so the frontend needs no logic at all |
+
+Nothing in the session actually *requires* being in-process — the inline
+implementation was a convenience. The descriptor factory swap
+(`DebugAdapterInlineImplementation` → `DebugAdapterExecutable('minuteos',
+['dap'])`) is the last step, once the remaining pieces above are ported.
+
+Until then, the CLI's `Bmp.cs`/`StlinkSmu.cs` and the extension's
 drivers coexist deliberately — they are the same, small, protocol-level code,
 and phase 3 deletes the TS side rather than trying to share it.
 

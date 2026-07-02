@@ -1,0 +1,9 @@
+name: dap-e2e
+defaults:
+  settings:
+    debug.server: qemu
+    qemu.machine: lm3s6965evb
+configurations:
+  qemu:
+    target: cortex-m3
+    config: Release

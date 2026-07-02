@@ -3,6 +3,7 @@
     <Project Path="src/MinuteOS.Build.Abstractions/MinuteOS.Build.Abstractions.csproj" />
     <Project Path="src/MinuteOS.Build/MinuteOS.Build.csproj" />
     <Project Path="src/MinuteOS.Cli/MinuteOS.Cli.csproj" />
+    <Project Path="src/MinuteOS.Debug/MinuteOS.Debug.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/MinuteOS.Build.Tests/MinuteOS.Build.Tests.csproj" />

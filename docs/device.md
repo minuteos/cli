@@ -137,6 +137,7 @@ consume at debug time — see
 | `minuteos erase [-c cfg] [-d serial]` | Run the `erase` step (no build). |
 | `minuteos debug [-c cfg]` | Build, start the `gdb-server` step in the background, attach `<toolchain-prefix>gdb {image}` via `target extended-remote localhost:<gdb-port>`, and kill the server when gdb exits. |
 | `minuteos debug --server-only` | Only run the gdb server in the foreground — for an IDE / editor extension to attach to. |
+| `minuteos dap` | Run the debug adapter (DAP over stdio) — the minute-debug session engine, for editors/IDEs. |
 | `minuteos power on\|off` | Drive target power via the configured SMU (STLINK-V3PWR). |
 
 All run with live, interactive stdio (you see the probe tool's output; gdb is
@@ -161,9 +162,25 @@ given, instead of leaving a dangling flag.
 
 ## IDE / extension integration
 
-`minuteos debug --server-only` is the attach point for an editor extension: it
-builds, starts the configured gdb server on `gdb-port`, and stays in the
-foreground until stopped. The extension (or a `launch.json`) then connects its
-own debug adapter to `localhost:<gdb-port>` with the ELF at the path printed by
-`minuteos info` (`Output:`). Programmatic consumers can resolve the same
+The primary integration point is **`minuteos dap`**: a full Debug Adapter
+Protocol server (the C# port of the minute-debug session — GDB/MI, qemu/BMP
+servers, breakpoints, variables, stepping) speaking DAP over stdio. Any editor
+that can start a debug-adapter executable gets the whole debug engine:
+
+```jsonc
+// launch request arguments - either a config reference...
+{ "config": "board" }                       // resolved through the build system
+// ...or inline
+{ "program": "out/board/app.elf", "gdb": "arm-none-eabi-gdb",
+  "server": { "type": "qemu", "machine": "lm3s6965evb" } }
+```
+
+See [debugger integration](design/debugger-integration.md) for the
+architecture and `tests/dap-e2e/` for a scripted client exercising the full
+flow under qemu.
+
+Alternatively, `minuteos debug --server-only` builds, starts the configured
+gdb server on `gdb-port`, and stays in the foreground for an external debug
+adapter to attach to `localhost:<gdb-port>` with the ELF at the path printed
+by `minuteos info` (`Output:`). Programmatic consumers can resolve the same
 information via `DeviceSpecResolver.Resolve(config, "gdb-server", image)`.

@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MinuteOS.Build\MinuteOS.Build.csproj" />
+    <ProjectReference Include="..\MinuteOS.Debug\MinuteOS.Debug.csproj" />
   </ItemGroup>
 
 </Project>

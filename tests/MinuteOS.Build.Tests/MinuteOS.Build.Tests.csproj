@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\MinuteOS.Build\MinuteOS.Build.csproj" />
+    <ProjectReference Include="..\..\src\MinuteOS.Debug\MinuteOS.Debug.csproj" />
   </ItemGroup>
 
   <ItemGroup>
