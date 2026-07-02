@@ -52,8 +52,11 @@ public static class DeviceSpecResolver
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "flash", "erase", "gdb-server" };
 
     /// <summary>
-    /// Resolves an operation for a configuration, or null when its steps don't
-    /// declare it. The last (most specific) matching step wins.
+    /// Resolves an operation for a configuration: an explicit Device-phase step
+    /// wins; otherwise, when the settings bag carries <c>jlink.device</c>, a
+    /// J-Link default invocation is synthesized (matching the Make-era workflow
+    /// where <c>JLINK_DEVICE</c> was the single per-board knob). Null when
+    /// neither is available. The last (most specific) matching step wins.
     /// </summary>
     public static DeviceSpec? Resolve(BuildConfiguration config, string operation, string image, string? device = null)
     {
@@ -61,19 +64,38 @@ public static class DeviceSpecResolver
             s.Name.Equals(operation, StringComparison.OrdinalIgnoreCase)
             && (s.Phase == BuildPhase.Device || s.Phase == null));
 
-        if (stepRef == null)
-            return null;
+        var cfg = stepRef?.Config ?? new Dictionary<string, string>();
+        var command = cfg.GetValueOrDefault("command");
+        var argsTemplate = cfg.GetValueOrDefault("args");
+        var script = cfg.GetValueOrDefault("script");
 
-        var cfg = stepRef.Config ?? new Dictionary<string, string>();
-        if (!cfg.TryGetValue("command", out var command) || string.IsNullOrWhiteSpace(command))
-            return null;
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            // No explicit command: fall back to the J-Link provider.
+            if (JLinkDefaults(operation, config.Settings) is not var (jcmd, jargs, jscript))
+                return null;
+            command = jcmd;
+            argsTemplate ??= jargs;
+            script ??= jscript;
+        }
 
         var port = cfg.GetValueOrDefault("gdb-port", "3333");
         string Sub(string token) => Substitute(token, config, image, device, port);
 
+        // A `script:` block is written (substituted) next to the outputs and
+        // referenced via {script} - for tools driven by command files
+        // (JLinkExe -CommanderScript, openocd -f, ...).
+        if (script != null && argsTemplate?.Contains("{script}") == true)
+        {
+            var scriptPath = Path.Combine(config.OutputRoot, $"{operation}.device-script");
+            Directory.CreateDirectory(config.OutputRoot);
+            File.WriteAllText(scriptPath, Sub(script.ReplaceLineEndings("\n")) + "\n");
+            argsTemplate = argsTemplate.Replace("{script}", scriptPath);
+        }
+
         // Drop [optional groups] whose placeholders resolve empty, then tokenize
         // (quotes keep substituted paths-with-spaces whole) and substitute.
-        var raw = OptionalGroup.Replace(cfg.GetValueOrDefault("args", ""), m =>
+        var raw = OptionalGroup.Replace(argsTemplate ?? "", m =>
             Placeholder.Matches(m.Groups[1].Value).Any(ph => Sub(ph.Value).Length == 0)
                 ? "" : m.Groups[1].Value);
 
@@ -83,6 +105,36 @@ public static class DeviceSpecResolver
             .ToList();
 
         return new DeviceSpec(command, args, cfg);
+    }
+
+    /// <summary>
+    /// Built-in J-Link invocations for the standard operations, driven purely by
+    /// settings: <c>jlink.device</c> (required), <c>jlink.interface</c> (SWD),
+    /// <c>jlink.speed</c> (4000). Matches the vsix/Make-era J-Link workflow.
+    /// </summary>
+    private static (string Command, string Args, string? Script)? JLinkDefaults(string operation, Settings settings)
+    {
+        var jdevice = settings.Scalar("jlink.device");
+        if (string.IsNullOrEmpty(jdevice))
+            return null;
+
+        var jif = settings.Scalar("jlink.interface") ?? "SWD";
+        var jspeed = settings.Scalar("jlink.speed") ?? "4000";
+        var common = $"-NoGui 1 -Device {jdevice} -If {jif} -Speed {jspeed}";
+
+        return operation.ToLowerInvariant() switch
+        {
+            "flash" => ("JLinkExe",
+                $"{common} [-SelectEmuBySN {{device}}] -AutoConnect 1 -ExitOnError 1 -CommanderScript {{script}}",
+                "loadfile {image}\nr\ng\nqc"),
+            "erase" => ("JLinkExe",
+                $"{common} [-SelectEmuBySN {{device}}] -AutoConnect 1 -ExitOnError 1 -CommanderScript {{script}}",
+                "erase\nqc"),
+            "gdb-server" => ("JLinkGDBServer",
+                $"-Device {jdevice} -If {jif} -Speed {jspeed} -Port {{port}} [-Select USB={{device}}] -NoGui",
+                null),
+            _ => null,
+        };
     }
 
     private static string Substitute(string token, BuildConfiguration config, string image, string? device, string port)

@@ -77,10 +77,50 @@ public class DeviceSpecResolverTests : IDisposable
     }
 
     [Fact]
-    public void Resolve_RequiresCommand()
+    public void Resolve_RequiresCommandOrJlinkDevice()
     {
         var config = Configure(
             "    steps:\n      - name: flash\n        phase: Device\n        config: { args: '-x' }\n");
         Assert.Null(DeviceSpecResolver.Resolve(config, "flash", "/i"));
+    }
+
+    [Fact]
+    public void JlinkDevice_SynthesizesAllOperations()
+    {
+        // A board that sets ONLY jlink.device gets flash/erase/gdb-server for free
+        // (the vsix / Make-era JLINK_DEVICE workflow).
+        var config = Configure("    settings:\n      jlink.device: EFR32MG12P332F1024GL125\n");
+        var image = Path.Combine(config.OutputRoot, "app.elf");
+
+        var flash = DeviceSpecResolver.Resolve(config, "flash", image)!;
+        Assert.Equal("JLinkExe", flash.Program);
+        Assert.Contains("EFR32MG12P332F1024GL125", flash.Args);
+        Assert.DoesNotContain("-SelectEmuBySN", flash.Args);   // no -d => optional group dropped
+
+        // The commander script is materialized next to the outputs.
+        var scriptPath = flash.Args[flash.Args.IndexOf("-CommanderScript") + 1];
+        Assert.Contains($"loadfile {image}", File.ReadAllText(scriptPath));
+
+        var erase = DeviceSpecResolver.Resolve(config, "erase", image, device: "483066211")!;
+        Assert.Contains("-SelectEmuBySN", erase.Args);
+        Assert.Contains("483066211", erase.Args);
+        var eraseScript = erase.Args[erase.Args.IndexOf("-CommanderScript") + 1];
+        Assert.StartsWith("erase", File.ReadAllText(eraseScript));
+
+        var server = DeviceSpecResolver.Resolve(config, "gdb-server", image)!;
+        Assert.Equal("JLinkGDBServer", server.Program);
+        Assert.Contains("3333", server.Args);   // default port
+    }
+
+    [Fact]
+    public void ExplicitStep_OverridesJlinkDefaults()
+    {
+        var config = Configure(
+            "    settings:\n      jlink.device: X\n" +
+            "    steps:\n      - name: flash\n        phase: Device\n        config: { command: custom-flasher, args: '{image}' }\n");
+
+        var spec = DeviceSpecResolver.Resolve(config, "flash", "/i.elf")!;
+        Assert.Equal("custom-flasher", spec.Program);
+        Assert.Equal(["/i.elf"], spec.Args);
     }
 }

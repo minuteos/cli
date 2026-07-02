@@ -33,6 +33,47 @@ steps:
 Any configuration using that target inherits the operations; a config-level step
 overrides the target's (most specific wins).
 
+## J-Link: one setting for everything
+
+The Make-era workflow (and the current VS Code extension) is J-Link based, with
+`JLINK_DEVICE` as the single per-board knob. The tool preserves that: a board
+that sets **`jlink.device`** gets all three operations synthesized — no command
+lines to write:
+
+```yaml
+# targets/my-board/target.yaml
+settings:
+  jlink.device: EFR32MG12P332F1024GL125
+  # jlink.interface: SWD        # default
+  # jlink.speed: "4000"          # default
+  # jlink.swo-frequency: "1000000"  # used by `minuteos vscode`
+```
+
+- `flash` → `JLinkExe -Device … -CommanderScript` (`loadfile {image}; r; g; qc`)
+- `erase` → `JLinkExe … -CommanderScript` (`erase; qc`)
+- `gdb-server` → `JLinkGDBServer -Device … -Port {port}`
+- `-d <serial>` selects among multiple probes (`-SelectEmuBySN`)
+
+Commander scripts are written (substituted) to `out/<cfg>/<op>.device-script`,
+so what ran is always inspectable. An explicit `flash`/`erase`/`gdb-server`
+step overrides the synthesized default (e.g. to use openocd instead). A step's
+`script:` block plus `{script}` in `args` gives the same command-file mechanism
+to any tool.
+
+## VS Code integration
+
+`minuteos vscode` generates `.vscode/` for the [Cortex-Debug](https://marketplace.visualstudio.com/items?itemName=marus25.cortex-debug)
+extension — the port of the Make-era `VSCode.mk`:
+
+- **launch.json** — `Launch <cfg>` / `Attach <cfg>` entries (type `cortex-debug`,
+  servertype `jlink`, the config's `jlink.device`, SWO console on stimulus port 0
+  at `jlink.swo-frequency`); launching builds first via the matching task.
+- **tasks.json** — `minuteos: build <cfg>` tasks (first configuration is the
+  default build task).
+- **c_cpp_properties.json** — IntelliSense from the generated
+  `compile_commands.json` (always refreshed; launch/tasks are kept unless
+  `--force`).
+
 ## Commands
 
 | Command | What it does |
