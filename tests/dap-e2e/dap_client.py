@@ -283,6 +283,21 @@ def scenario_renode():
     hi = next(f for f in fields if f["name"].strip() == "HI")
     check(strip_ansi(hi["value"]).startswith("0"), "MAGIC.HI bitfield decoded as zero")
 
+    # SWO profiling: the firmware "samples itself" through the overlay's DWT
+    # PC-sample emit register with a 3:1 skew between two functions.
+    client.request("minuteos.profile.start")
+    client.request("continue", {"threadId": thread_id})
+    client.wait_event("continued")
+    time.sleep(3)
+    report = client.request("minuteos.profile.stop", {"top": 10}, timeout=60)["body"]
+    check(report["totalSamples"] > 0, f"PC samples collected ({report['totalSamples']})")
+    functions = {f["name"]: f for f in report["functions"]}
+    check("profiled_hot" in functions and "profiled_cold" in functions,
+          "samples symbolicated to function names from the ELF")
+    check(functions["profiled_hot"]["samples"] > functions["profiled_cold"]["samples"],
+          "sample weights follow the 3:1 call skew")
+    check(report["unresolvedSamples"] == 0, "all samples resolved")
+
     check(client.finish() == 0, "adapter exits cleanly")
     deadline = time.time() + 15  # renode (mono) can take a few seconds to exit
     while time.time() < deadline and \

@@ -17,6 +17,14 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
         private const long ItmTcr = 0xE80;
         private const long ItmTer = 0xE00;
 
+        // Extension over the vs-debugger original: a write-only register that
+        // frames the written value as a DWT PC-sample packet (hardware source
+        // discriminator 2). Renode's Cortex-M models have no DWT, so this
+        // gives emulated targets a way to feed the SWO profiler - the wire
+        // format is exactly what real silicon emits.
+        private const long EmitPcSample = 0xF00;
+        private const byte PcSampleHeader = (2 << 3) | 0x04 | 0x03;
+
         private readonly Stream stream;
 
         public MinuteItmCapture(int port)
@@ -32,7 +40,23 @@ namespace Antmicro.Renode.Peripherals.Miscellaneous
 
         public void WriteByte(long offset, byte value) => Emit(offset, value, 1);
         public void WriteWord(long offset, ushort value) => Emit(offset, value, 2);
-        public void WriteDoubleWord(long offset, uint value) => Emit(offset, value, 4);
+
+        public void WriteDoubleWord(long offset, uint value)
+        {
+            if (offset == EmitPcSample)
+            {
+                var packet = new byte[5];
+                packet[0] = PcSampleHeader;
+                for (var i = 0; i < 4; i++)
+                {
+                    packet[i + 1] = (byte)(value >> (8 * i));
+                }
+                stream.Write(packet, 0, packet.Length);
+                stream.Flush();
+                return;
+            }
+            Emit(offset, value, 4);
+        }
 
         public byte ReadByte(long offset) => (byte)Read(offset);
         public ushort ReadWord(long offset) => (ushort)Read(offset);

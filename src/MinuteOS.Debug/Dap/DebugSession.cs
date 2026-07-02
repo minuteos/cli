@@ -33,6 +33,8 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
     private Task<Svd.SvdDevice?>? _svdTask;
     private Swo.SwoSession? _swoSession;
     private Swo.ISwoSource? _swoSource;
+    private readonly Swo.SwoProfiler _profiler = new();
+    private Lazy<ElfSymbols>? _symbols;
     private DisassemblyCache? _disassemblyCache;
 
     private readonly Dictionary<int, JsonObject> _frameIdMap = [];
@@ -88,6 +90,8 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
                 "stepOut" => await ExecAsync("exec-finish", cancellationToken),
                 "readMemory" => await ReadMemoryAsync(args, cancellationToken),
                 "disassemble" => await DisassembleAsync(args, cancellationToken),
+                "minuteos.profile.start" => await ProfileStartAsync(cancellationToken),
+                "minuteos.profile.stop" => await ProfileStopAsync(args, cancellationToken),
                 _ => throw new NotSupportedException($"Unsupported request '{command}'"),
             };
             await connection.SendResponseAsync(request, success: true, body, cancellationToken: cancellationToken);
@@ -132,10 +136,14 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
         _stopAtConnect = config["stopAtConnect"]?.GetValue<bool>() ?? false;
 
         var cwd = config["cwd"]?.GetValue<string>();
+        var program = config["program"]?.GetValue<string>()
+            ?? throw new InvalidOperationException("Launch configuration has no 'program'");
+        var programPath = Path.GetFullPath(program, cwd != null ? Path.GetFullPath(cwd) : Environment.CurrentDirectory);
+        _symbols = new Lazy<ElfSymbols>(() => ElfSymbols.Load(programPath));
+
         var probeConfig = new ProbeConfig
         {
-            Program = config["program"]?.GetValue<string>()
-                ?? throw new InvalidOperationException("Launch configuration has no 'program'"),
+            Program = program,
             Gdb = config["gdb"]?.GetValue<string>() ?? "gdb",
             Server = config["server"]
                 ?? throw new InvalidOperationException("Launch configuration has no 'server'"),
@@ -228,13 +236,69 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
 
         await source.EnableAsync(Probe.Server, Gdb, cancellationToken);
 
+        _profiler.Enabled = swoConfig.PcSample;
         _swoSession = new Swo.SwoSession(swoConfig, _cortex!, stream, packet =>
         {
             if (!packet.Dwt && packet.Channel == 0)
                 _ = SendOutputAsync("stdout", System.Text.Encoding.UTF8.GetString(packet.Data));
+            _profiler.OnPacket(packet);
         }, logger);
         await _swoSession.StartAsync(cancellationToken);
     }
+
+    // #region Profiling (minuteos.profile.* custom requests)
+
+    /// <summary>Starts PC-sample collection: turns on DWT PC sampling and resets counters.</summary>
+    private async Task<JsonObject?> ProfileStartAsync(CancellationToken cancellationToken)
+    {
+        if (_swoSession == null)
+            throw new InvalidOperationException("Profiling needs SWO - configure 'swo' in the launch configuration");
+
+        _profiler.Reset();
+        await ExecWhileStoppedAsync(() => _cortex!.SetPcSamplingAsync(true, cancellationToken), cancellationToken);
+        _profiler.Enabled = true;
+        return null;
+    }
+
+    /// <summary>
+    /// Stops collection and returns the symbolicated report: samples grouped
+    /// by function (resolved once per unique PC from the program's ELF symbol
+    /// table), sorted by count.
+    /// </summary>
+    private async Task<JsonObject> ProfileStopAsync(JsonObject args, CancellationToken cancellationToken)
+    {
+        _profiler.Enabled = false;
+        if (_swoSession != null && _cortex != null)
+        {
+            try
+            {
+                await ExecWhileStoppedAsync(() => _cortex.SetPcSamplingAsync(false, cancellationToken), cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug("Disabling PC sampling failed: {Message}", ex.Message);
+            }
+        }
+
+        Func<uint, FunctionSymbol?> resolve;
+        try
+        {
+            var symbols = _symbols?.Value;
+            resolve = pc => symbols?.Resolve(pc);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("Cannot load symbols for profiling: {Message}", ex.Message);
+            resolve = _ => null;
+        }
+
+        var report = _profiler.Report(resolve,
+            args["top"] is { } top ? MiClient.ParseNumber(top) : 50);
+        await SendOutputAsync("console", Swo.SwoProfiler.FormatReport(report));
+        return report;
+    }
+
+    // #endregion
 
     /// <summary>
     /// Resolves the SVD layers: a model name (or .svd path), or a list of

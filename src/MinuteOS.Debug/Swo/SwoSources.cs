@@ -38,6 +38,7 @@ public static class SwoSourceFactory
             CpuFrequency = ToInt(config["cpuFrequency"]),
             SwvFrequency = ToInt(config["swvFrequency"]),
             Format = ToInt(config["format"]) == 1 ? SwvFormat.Manchester : SwvFormat.Uart,
+            PcSample = (config["profile"] ?? config["pcSample"])?.GetValue<bool>() ?? false,
         };
         var type = config["type"]?.GetValue<string>() ?? "";
         ISwoSource source = type.ToLowerInvariant() switch

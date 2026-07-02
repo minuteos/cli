@@ -148,6 +148,16 @@ UI + descriptor. From then on there is exactly one device/debug codebase.
   `traceswo enable` probed via `monitor help`; the stream is read from a
   device path — automatic USB interface claim needs a USB stack and stays
   extension-side for now). Stimulus port 0 becomes DAP `output` events.
+- `Swo/SwoProfiler` + `ElfSymbols` — PC-sampling profiler (beyond the
+  original extension): DWT PC-sample packets are counted per unique address
+  (O(1) per sample) and symbolicated once per unique PC against the ELF
+  `.symtab` (STT_FUNC ranges sorted for binary search; ELF32/ELF64, Thumb
+  bit handled on ARM). Exposed as the `minuteos.profile.start`/`.stop`
+  custom requests (report grouped by function, sorted by weight) and the
+  `swo.profile` setting for sample-from-launch; `Cortex.SetPcSamplingAsync`
+  toggles `DWT_CTRL.PCSAMPLENA` live. Under renode, the ITM-capture overlay
+  gained an emit register that frames writes as wire-format DWT PC samples,
+  so the whole pipeline is testable without silicon.
 - `Svd/` — the CMSIS-SVD parser (`derivedFrom` resolution, register-size
   inheritance, all three field bit-range notations), the on-disk cache over
   the `cmsis-svd/cmsis-svd-data` index (x-wildcard model matching, largest

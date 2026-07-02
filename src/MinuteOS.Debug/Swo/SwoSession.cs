@@ -10,6 +10,8 @@ public sealed record SwoConfig
     public int SwvFrequency { get; init; }
     /// <summary>SWV encoding (1 = Manchester, 2 = UART).</summary>
     public SwvFormat Format { get; init; } = SwvFormat.Uart;
+    /// <summary>Enable DWT PC sampling from the start of the session (profiling).</summary>
+    public bool PcSample { get; init; }
 }
 
 /// <summary>
@@ -31,6 +33,7 @@ public sealed class SwoSession(SwoConfig config, Cortex cortex, Stream stream, A
             CpuFrequency = config.CpuFrequency,
             SwvFrequency = config.SwvFrequency,
             Format = config.Format,
+            PcSample = config.PcSample,
         }, cancellationToken);
 
         _reader = Task.Run(ReaderAsync, CancellationToken.None);

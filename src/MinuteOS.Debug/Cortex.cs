@@ -134,6 +134,18 @@ public sealed class Cortex(MiClient mi, ILogger logger)
         await Write32Async(p.Itm + ItmTer, ~0u, cancellationToken);
     }
 
+    /// <summary>
+    /// Turns DWT PC sampling on/off (the profiler's sample source). The rest
+    /// of DWT_CTRL (sync/cycle tap, CYCCNTENA) must already be configured -
+    /// <see cref="SetupTraceAsync"/> does that when the SWO session starts.
+    /// </summary>
+    public async Task SetPcSamplingAsync(bool enable, CancellationToken cancellationToken = default)
+    {
+        var p = await DetectPeripheralsAsync(cancellationToken);
+        await Modify32Async(p.Dwt + DwtCtrl,
+            n => enable ? n | DwtCtrlPcsamplena : n & ~DwtCtrlPcsamplena, cancellationToken);
+    }
+
     /// <summary>Sets the vector-catch mask in DEMCR (exception breakpoints).</summary>
     public async Task SetExceptionMaskAsync(int mask, CancellationToken cancellationToken = default)
     {

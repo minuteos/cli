@@ -10,9 +10,12 @@ the [`cortex-m3-qemu`](../../examples/cortex-m3-qemu) example target, twice:
   output as `output` events → pause → disconnect.
 - **renode** (skipped when renode is not installed): launch with the renode
   server (driven over its Telnet monitor), SWO via the ITM-capture overlay
-  (the firmware's stimulus-port writes come back as `output` events), and
-  SVD peripheral scopes from a local `.svd` — a firmware-written "register"
-  is read back with bitfield decode — then graceful teardown.
+  (the firmware's stimulus-port writes come back as `output` events), SVD
+  peripheral scopes from a local `.svd` — a firmware-written "register" is
+  read back with bitfield decode — and SWO **profiling**: the firmware emits
+  DWT PC samples with a 3:1 skew between two functions, and
+  `minuteos.profile.start`/`.stop` returns them symbolicated from the ELF
+  with matching weights — then graceful teardown.
 
 ```bash
 ./run.sh              # scaffolds into a temp dir, builds, runs the client

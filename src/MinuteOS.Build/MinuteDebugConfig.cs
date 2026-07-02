@@ -109,6 +109,7 @@ public static class MinuteDebugConfig
         if (int.TryParse(s.Scalar("swo.swv-frequency"), out var swv)) swo["swvFrequency"] = swv;
         if (s.Scalar("swo.format") is { } format)
             swo["format"] = format.ToLowerInvariant() is "manchester" or "1" ? 1 : 2;
+        if (IsOn(s.Scalar("swo.profile"))) swo["profile"] = true;
         return swo.Count > 1 ? swo : type;
     }
 

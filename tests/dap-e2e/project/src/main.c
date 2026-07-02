@@ -12,10 +12,27 @@ int limit = 5;
  * overlay, which frames each write as an ITM source packet over SWO. */
 #define ITM_STIM0_U8 (*(volatile unsigned char *)0xE0000000)
 
+/* MinuteItmCapture's DWT PC-sample emit register: a value written here is
+ * framed exactly like a hardware DWT PC-sample packet, feeding the SWO
+ * profiler (renode models no DWT of their own). */
+#define ITM_EMIT_PC (*(volatile unsigned int *)0xE0000F00)
+
 static void itm_puts(const char *s)
 {
     while (*s)
         ITM_STIM0_U8 = (unsigned char)*s++;
+}
+
+/* Two functions with a 3:1 sample skew for the profiling test. Each "samples
+ * itself": it reports a PC just inside its own body. */
+__attribute__((noinline)) static void profiled_hot(void)
+{
+    ITM_EMIT_PC = (unsigned int)&profiled_hot + 2;
+}
+
+__attribute__((noinline)) static void profiled_cold(void)
+{
+    ITM_EMIT_PC = (unsigned int)&profiled_cold + 2;
 }
 #endif
 
@@ -38,6 +55,15 @@ int main(void)
 
 #ifdef USE_ITM
     itm_puts("swo-hello\n");
+
+    for (;;)
+    {
+        for (int j = 0; j < 3; j++)
+            profiled_hot();
+        profiled_cold();
+        for (volatile int d = 0; d < 500; d++)
+            ;
+    }
 #endif
 
     for (;;)

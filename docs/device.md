@@ -188,6 +188,18 @@ debug-adapter executable gets the whole debug engine:
 - **`swo`** — `"renode"` (an ITM-capture peripheral is overlaid onto the
   machine; no platform changes needed) or `{ "type": "bmp", "port": ... }`.
   Stimulus port 0 is forwarded as `output` events.
+- **Profiling** — with SWO active, the adapter collects DWT **PC samples**
+  and symbolicates them against the program's ELF symbol table (sorted
+  function ranges, one binary search per *unique* PC — the hot path is a
+  counter increment per sample). Control it with the
+  `minuteos.profile.start` / `minuteos.profile.stop` custom requests —
+  `stop` returns `{ totalSamples, sleepSamples, unresolvedSamples,
+  functions: [{ name, address, samples, percent }] }` (top N, `{"top": n}`)
+  and prints a summary to the debug console — or set `swo.profile: "true"`
+  (launch `"profile": true`) to sample from launch. On real silicon the
+  samples come from the DWT's cycle-tap sampler; under renode the
+  ITM-capture overlay provides an emit register (`0xE0000F00`) so emulated
+  firmware can feed the same pipeline.
 - **renode `display`** — `{ "peripheral": "sysbus.lcd" }` overlays a
   framebuffer tap; the adapter relays the frame stream on a local port
   announced via the `minuteos.display` custom event.
