@@ -86,6 +86,17 @@ link, or a sub-build alongside compiles), and independent **actions** within a
 step run concurrently (all the compiles), while ordering constraints (PCH before
 compiles) are respected.
 
+## Inspecting the build
+
+- `minuteos graph -c <cfg>` prints the step graph: each step's consumed/produced
+  artifact properties and the wired edges, in execution order.
+- `minuteos build -n` (dry run) evaluates the cache and reports every action
+  that would run **with its reason** (`input changed: main.cpp`, `depends on
+  rebuilt main.o`, `command/config changed`, ...) without building anything.
+- `minuteos build --explain` logs the same reasons during a real build.
+- `minuteos build -w` watches the project and rebuilds on change (build
+  outputs and VCS internals are ignored).
+
 ## IDE integration: compile_commands.json
 
 Every build writes a clangd-compatible compilation database with the **exact**

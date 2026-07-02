@@ -22,6 +22,9 @@ public class TestCommand : LoggingCommand
     [Option("--project", "-p", Description = "Project root directory")]
     public string? ProjectDir { get; set; }
 
+    [Option("--junit", Description = "Write a JUnit XML test report to this file (for CI)")]
+    public string? Junit { get; set; }
+
     public async Task<int> ExecuteAsync(CancellationToken cancellationToken)
     {
         var projectRoot = ProjectConfig.GetProjectRoot(ProjectDir);
@@ -48,6 +51,7 @@ public class TestCommand : LoggingCommand
         var grandTotal = 0;
         var grandPassed = 0;
         var grandFailed = 0;
+        var report = new List<(string Suite, TestRunResult? Result)>();
 
         foreach (var configName in configNames)
         {
@@ -101,6 +105,8 @@ public class TestCommand : LoggingCommand
                     projectConfig, configName, projectRoot, suite,
                     toolchain, executor, parallelism, cancellationToken);
 
+                report.Add(($"{configName}/{suite.Id}", result));
+
                 if (result == null)
                 {
                     // Build failure - already logged.
@@ -139,6 +145,12 @@ public class TestCommand : LoggingCommand
         Logger.LogInformation("==============================");
         Logger.LogInformation("Total: {Total}  Passed: {Passed}  Failed: {Failed}",
             grandTotal, grandPassed, grandFailed);
+
+        if (Junit != null)
+        {
+            JUnitReport.Write(Junit, projectConfig.Name ?? "minuteos", report);
+            Logger.LogInformation("JUnit report: {Path}", Path.GetFullPath(Junit));
+        }
 
         return anyFailures ? 1 : 0;
     }

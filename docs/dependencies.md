@@ -92,6 +92,10 @@ minuteos restore
 
 Idempotent: `present` / `cached (main -> 0a1b2c3d)` on re-runs.
 
+`restore --frozen` never re-resolves: mutable refs must already be in
+`minuteos.lock` (it fails otherwise). Use it in CI so builds can't silently
+float to a moved branch.
+
 ## Recommended workflow
 
 - Libraries you also **edit** alongside the project: submodules —

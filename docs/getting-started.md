@@ -56,11 +56,12 @@ minuteos run   -c host      # build, then execute
 
 | Command | What it does |
 |---------|--------------|
-| `build [-c <cfg>]` | Build a configuration (all, if omitted). `-j N` for parallelism, `--hash` for content-hash incrementality. |
+| `build [-c <cfg>]` | Build a configuration (all, if omitted). `-j N` parallelism, `--hash` content-hash incrementality, `-n`/`--dry-run` show what would run and why, `--explain` log stale reasons, `-w`/`--watch` rebuild on change. |
 | `run -c <cfg>` | Build, then execute the image — directly (host) or via the target's `run` step (emulator). |
-| `test [-c <cfg>]` | Discover and run test suites (`-f` filter cases, `-s` filter suites). |
+| `test [-c <cfg>]` | Discover and run test suites (`-f` filter cases, `-s` filter suites, `--junit <file>` CI report). |
 | `info [-c <cfg>]` | Show the resolved configuration (targets, components, settings). |
-| `restore` | Restore external dependencies (init git submodules, clone declared repos). |
+| `restore` | Restore external dependencies (`--frozen`: use only locked commits). |
+| `graph [-c <cfg>]` | Show the build step graph (steps, artifact edges, order). |
 | `migrate` | Convert legacy Make `Include.mk` files to YAML. |
 | `new`, `init`, `clean` | Scaffold / initialize / clean. |
 

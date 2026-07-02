@@ -311,6 +311,20 @@ public sealed class BuildEngine
         }
     }
 
+    /// <summary>Steps in execution order (for inspection, e.g. `minuteos graph`).</summary>
+    public static IReadOnlyList<IGraphStep> Order(IReadOnlyList<IGraphStep> steps) =>
+        TopologicalOrder(steps);
+
+    /// <summary>The wired producer→consumer edges (for inspection).</summary>
+    public static IEnumerable<(IGraphStep Producer, IGraphStep Consumer)> Edges(IReadOnlyList<IGraphStep> steps) =>
+        from p in steps
+        from c in steps
+        where !ReferenceEquals(p, c) && Produces(p, c)
+        select (p, c);
+
+    /// <summary>A settings augmenter (runs before readers; see the engine docs).</summary>
+    public static bool IsSettingsAugmenter(IGraphStep step) => IsAugmenter(step);
+
     /// <summary>
     /// Orders steps so that every producer precedes a consumer of its output kind.
     /// An edge A→B exists when some B selector matches some A produce-template.
