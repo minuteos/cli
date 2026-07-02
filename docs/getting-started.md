@@ -61,7 +61,7 @@ minuteos run   -c host      # build, then execute
 | `test [-c <cfg>]` | Discover and run test suites (`-f` filter cases, `-s` filter suites, `--junit <file>` CI report). |
 | `info [-c <cfg>]` | Show the resolved configuration (targets, components, settings). |
 | `flash` / `erase` / `debug` / `power` | Device operations — synthesized from `debug.server: bmp` or `jlink.device`, or explicit `Device` steps; SMU power control (see [device management](device.md)). |
-| `vscode` | Generate `.vscode/` (Cortex-Debug launch configs, build tasks, IntelliSense). |
+| `vscode` | Generate `.vscode/` (minute-debug / Cortex-Debug launch configs, build tasks, IntelliSense). |
 | `restore` | Restore external dependencies (`--frozen`: use only locked commits). |
 | `graph [-c <cfg>]` | Show the build step graph (steps, artifact edges, order). |
 | `migrate` | Convert legacy Make `Include.mk` files to YAML. |
