@@ -69,7 +69,9 @@ public static class GraphRunner
                 : MapConfiguredStep(stepRef);
             if (graphStep != null)
                 steps.Add(graphStep);
-            else if (stepRef.Phase != MinuteOS.Build.Steps.BuildPhase.Run && !RunStepNames.Contains(stepRef.Name))
+            else if (stepRef.Phase is not (MinuteOS.Build.Steps.BuildPhase.Run or MinuteOS.Build.Steps.BuildPhase.Device)
+                     && !RunStepNames.Contains(stepRef.Name)
+                     && !DeviceSpecResolver.OperationNames.Contains(stepRef.Name))
                 logger.LogWarning("Unknown build step '{Name}'; skipping.", stepRef.Name);
         }
 

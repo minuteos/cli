@@ -125,6 +125,7 @@ CompileFlags:
 | `sub-build` | (a config name) | `object` (blob) | builds a nested config, embeds it |
 | `shell` | `image` (elf) | — | arbitrary command (escape hatch) |
 | `run` / `qemu` / `renode` | `image` | — | `Run` phase; invoked by run/test, not build |
+| `flash` / `erase` / `gdb-server` | `image` | — | `Device` phase; invoked by flash/erase/debug ([device management](device.md)) |
 
 ### sub-build
 

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using MinuteOS.Build;
 using triaxis.CommandLine;
 
@@ -64,46 +63,6 @@ public class RunCommand : LoggingCommand
         Logger.LogInformation("Running: {Program} {Args}", program, string.Join(' ', args));
         Logger.LogInformation("");
 
-        return await LaunchAsync(program, args, projectRoot, cancellationToken);
-    }
-
-    /// <summary>
-    /// Runs the process with inherited stdio (live output) and returns its exit code.
-    /// </summary>
-    private async Task<int> LaunchAsync(string program, List<string> args, string workingDirectory, CancellationToken cancellationToken)
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = program,
-            WorkingDirectory = workingDirectory,
-            UseShellExecute = false,
-        };
-        foreach (var arg in args)
-            psi.ArgumentList.Add(arg);
-
-        Process process;
-        try
-        {
-            process = Process.Start(psi)!;
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError("Failed to start '{Program}': {Message}", program, ex.Message);
-            return 1;
-        }
-
-        using (process)
-        {
-            try
-            {
-                await process.WaitForExitAsync(cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
-                return 130; // 128 + SIGINT
-            }
-            return process.ExitCode;
-        }
+        return await Interactive.RunAsync(program, args, projectRoot, cancellationToken);
     }
 }

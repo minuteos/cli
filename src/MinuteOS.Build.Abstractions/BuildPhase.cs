@@ -23,4 +23,11 @@ public enum BuildPhase
     /// the build; resolved out-of-band by <c>minuteos run</c> / <c>test</c>.
     /// </summary>
     Run,
+
+    /// <summary>
+    /// A device operation (flash, erase, gdb-server, ...). NOT part of the build;
+    /// resolved out-of-band by <c>minuteos flash</c> / <c>erase</c> / <c>debug</c>.
+    /// A board target declares how to perform each operation on its hardware.
+    /// </summary>
+    Device,
 }

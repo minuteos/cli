@@ -13,6 +13,8 @@ over the `MinuteOS.Build` library, so the same engine is usable programmatically
   `minuteos restore`.
 - [The build model](build-model.md) — the task graph, **how dependencies work**,
   incremental builds, and the built-in step catalog.
+- [Device management](device.md) — flash, erase, and debug via target-declared
+  probe commands.
 - [Writing a build step](writing-a-step.md) — the extension contract and how to
   register a custom step.
 - [Using the library programmatically](programmatic.md) — drive builds via DI.
