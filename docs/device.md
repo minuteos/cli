@@ -163,9 +163,10 @@ given, instead of leaving a dangling flag.
 ## IDE / extension integration
 
 The primary integration point is **`minuteos dap`**: a full Debug Adapter
-Protocol server (the C# port of the minute-debug session — GDB/MI, qemu/BMP
-servers, breakpoints, variables, stepping) speaking DAP over stdio. Any editor
-that can start a debug-adapter executable gets the whole debug engine:
+Protocol server (the C# port of the minute-debug session — GDB/MI, qemu/BMP/
+renode servers, breakpoints, variables, stepping, disassembly, SWO trace, SVD
+peripheral scopes) speaking DAP over stdio. Any editor that can start a
+debug-adapter executable gets the whole debug engine:
 
 ```jsonc
 // launch request arguments - either a config reference...
@@ -173,11 +174,29 @@ that can start a debug-adapter executable gets the whole debug engine:
 // ...or inline
 { "program": "out/board/app.elf", "gdb": "arm-none-eabi-gdb",
   "server": { "type": "qemu", "machine": "lm3s6965evb" } }
+// renode: the adapter drives renode's monitor; SWO arrives via an ITM overlay
+{ "program": "out/board/app.elf", "gdb": "arm-none-eabi-gdb",
+  "server": { "type": "renode", "script": "sim/board.resc" },
+  "swo": "renode", "svd": "STM32F407" }
 ```
 
-See [debugger integration](design/debugger-integration.md) for the
-architecture and `tests/dap-e2e/` for a scripted client exercising the full
-flow under qemu.
+- **`svd`** — a device model name (matched against the community
+  [cmsis-svd-data](https://github.com/cmsis-svd/cmsis-svd-data) index, cached
+  under `~/.cache/minuteos/svd`), a local `.svd` path, or
+  `[{ model, peripherals }]` layers. Peripherals appear as a DAP scope:
+  peripheral → registers → decoded bitfields.
+- **`swo`** — `"renode"` (an ITM-capture peripheral is overlaid onto the
+  machine; no platform changes needed) or `{ "type": "bmp", "port": ... }`.
+  Stimulus port 0 is forwarded as `output` events.
+- **renode `display`** — `{ "peripheral": "sysbus.lcd" }` overlays a
+  framebuffer tap; the adapter relays the frame stream on a local port
+  announced via the `minuteos.display` custom event.
+
+The `swo.*`, `renode.*`, and `debug.svd` settings feed the same model through
+`minuteos info --json` / `minuteos vscode`. See
+[debugger integration](design/debugger-integration.md) for the architecture
+and `tests/dap-e2e/` for a scripted client exercising the full flow under
+qemu and renode.
 
 Alternatively, `minuteos debug --server-only` builds, starts the configured
 gdb server on `gdb-port`, and stays in the foreground for an external debug

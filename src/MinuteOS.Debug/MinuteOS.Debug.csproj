@@ -16,4 +16,11 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.5" />
   </ItemGroup>
 
+  <!-- Renode plugin peripherals: C# compiled *by Renode* at runtime (monitor
+       `i @file`), not by this project - shipped as embedded text. -->
+  <ItemGroup>
+    <Compile Remove="Renode\Plugins\**" />
+    <EmbeddedResource Include="Renode\Plugins\*.cs" />
+  </ItemGroup>
+
 </Project>

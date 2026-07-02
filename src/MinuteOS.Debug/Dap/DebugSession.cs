@@ -17,14 +17,23 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
 {
     // Fake variable reference numbers for the scopes (the extension's VariableScope).
     private const int ScopeRegisters = 0x10000000;
+    private const int ScopePeripherals = 0x10000001;
     private const int ScopeGlobal = 0x10000002;
     private const int ScopeLocal = 0x10000003;
+    private const int ScopePeripheral = 0x20000000;
+    private const int ScopePeripheralRegister = 0x21000000;
+    private const int ScopePeripheralGroup = 0x22000000;
 
     private Probe? _probe;
     private bool _launch;
     private bool _stopAtConnect;
     private bool _configured;
     private bool _terminated;
+    private Cortex? _cortex;
+    private Task<Svd.SvdDevice?>? _svdTask;
+    private Swo.SwoSession? _swoSession;
+    private Swo.ISwoSource? _swoSource;
+    private DisassemblyCache? _disassemblyCache;
 
     private readonly Dictionary<int, JsonObject> _frameIdMap = [];
     private readonly Dictionary<object, GdbVar> _varMap = [];
@@ -66,7 +75,7 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
                 "disconnect" => await DisconnectAsync(),
                 "threads" => await ThreadsAsync(cancellationToken),
                 "stackTrace" => await StackTraceAsync(args, cancellationToken),
-                "scopes" => Scopes(args),
+                "scopes" => await ScopesAsync(args),
                 "variables" => await VariablesAsync(args, cancellationToken),
                 "evaluate" => await EvaluateAsync(args, cancellationToken),
                 "setBreakpoints" => await SetBreakpointsAsync(args, cancellationToken),
@@ -78,6 +87,7 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
                 "stepIn" => await ExecAsync(Granularity(args, "exec-step"), cancellationToken),
                 "stepOut" => await ExecAsync("exec-finish", cancellationToken),
                 "readMemory" => await ReadMemoryAsync(args, cancellationToken),
+                "disassemble" => await DisassembleAsync(args, cancellationToken),
                 _ => throw new NotSupportedException($"Unsupported request '{command}'"),
             };
             await connection.SendResponseAsync(request, success: true, body, cancellationToken: cancellationToken);
@@ -106,6 +116,7 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
         ["supportsConfigurationDoneRequest"] = true,
         ["supportsANSIStyling"] = true,
         ["supportsSteppingGranularity"] = true,
+        ["supportsDisassembleRequest"] = true,
         ["supportsInstructionBreakpoints"] = true,
         ["supportsValueFormattingOptions"] = true,
         ["supportsReadMemoryRequest"] = true,
@@ -140,6 +151,21 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
             if (type == MiRecordType.ConsoleStream)
                 _ = SendOutputAsync("console", text);
         };
+
+        _cortex = new Cortex(Gdb, logger);
+        _svdTask = LoadSvdAsync(config["svd"], cancellationToken);
+
+        // Renode framebuffer bridge: announce the socket side-channel so a
+        // frontend can connect and render frames.
+        if (Probe.Server is Servers.RenodeGdbServer { DisplayPort: { } displayPort })
+            await connection.SendEventAsync("minuteos.display", new JsonObject
+            {
+                ["host"] = "127.0.0.1",
+                ["port"] = displayPort,
+            }, cancellationToken);
+
+        if (config["swo"] is { } swoNode)
+            await StartSwoAsync(swoNode, cancellationToken);
 
         if (loadProgram && !Probe.Server.SkipLoad)
         {
@@ -187,6 +213,83 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
         return model;
     }
 
+    /// <summary>
+    /// Starts SWO capture: connects the byte source (BMP trace channel /
+    /// Renode ITM overlay), enables emission, configures the target's trace
+    /// bits, and forwards stimulus-port 0 to the debug console.
+    /// </summary>
+    private async Task StartSwoAsync(JsonNode swoNode, CancellationToken cancellationToken)
+    {
+        var (source, swoConfig) = Swo.SwoSourceFactory.Create(swoNode, logger);
+        _swoSource = source;
+        await source.ConnectAsync(cancellationToken);
+        if (source.Stream is not { } stream)
+            return;
+
+        await source.EnableAsync(Probe.Server, Gdb, cancellationToken);
+
+        _swoSession = new Swo.SwoSession(swoConfig, _cortex!, stream, packet =>
+        {
+            if (!packet.Dwt && packet.Channel == 0)
+                _ = SendOutputAsync("stdout", System.Text.Encoding.UTF8.GetString(packet.Data));
+        }, logger);
+        await _swoSession.StartAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Resolves the SVD layers: a model name (or .svd path), or a list of
+    /// <c>{ model, peripherals }</c> layers; model "target" uses what the
+    /// server detected. Layers merge as first device + all peripherals.
+    /// </summary>
+    private async Task<Svd.SvdDevice?> LoadSvdAsync(JsonNode? svdNode, CancellationToken cancellationToken)
+    {
+        var layers = svdNode switch
+        {
+            null => new JsonArray(new JsonObject { ["model"] = "target" }),
+            JsonArray array => array,
+            JsonObject obj => [(JsonObject)obj.DeepClone()],
+            _ => [new JsonObject { ["model"] = svdNode.GetValue<string>() }],
+        };
+
+        var cache = new Svd.SvdCache(logger);
+        var devices = new List<Svd.SvdDevice>();
+        foreach (var layer in layers.OfType<JsonObject>())
+        {
+            try
+            {
+                var model = layer["model"]?.GetValue<string>();
+                if (model == "target")
+                    model = Probe.Target.Model;
+                if (string.IsNullOrEmpty(model))
+                    continue;
+
+                var device = await cache.GetAsync(model, cancellationToken);
+                if (device == null)
+                    continue;
+
+                if (layer["peripherals"] is { } filterNode)
+                {
+                    var patterns = filterNode is JsonArray filters
+                        ? filters.Select(f => f?.GetValue<string>() ?? "").ToList()
+                        : [filterNode.GetValue<string>()];
+                    var matcher = Svd.SvdCache.WildcardMatcher(patterns);
+                    device.Peripherals = device.Peripherals.Where(p => matcher(p.Name)).ToList();
+                }
+                devices.Add(device);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning("Failed to load SVD layer: {Message}", ex.Message);
+            }
+        }
+
+        if (devices.Count == 0)
+            return null;
+        var merged = devices[0];
+        merged.Peripherals = devices.SelectMany(d => d.Peripherals).ToList();
+        return merged;
+    }
+
     private async Task<JsonObject?> ConfigurationDoneAsync(CancellationToken cancellationToken)
     {
         if (_configured)
@@ -214,6 +317,16 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
 
     private async Task CleanupAsync()
     {
+        if (_swoSession is { } swoSession)
+        {
+            _swoSession = null;
+            await swoSession.DisposeAsync();
+        }
+        if (_swoSource is { } swoSource)
+        {
+            _swoSource = null;
+            await swoSource.DisposeAsync();
+        }
         if (_probe is { } probe)
         {
             _probe = null;
@@ -399,16 +512,34 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
         return new JsonObject { ["stackFrames"] = stackFrames };
     }
 
-    private JsonObject Scopes(JsonObject args)
+    private async Task<JsonObject> ScopesAsync(JsonObject args)
     {
         var frameId = MiClient.ParseNumber(args["frameId"]);
-        return new JsonObject
+        var scopes = new JsonArray(
+            new JsonObject { ["name"] = "Local", ["variablesReference"] = ScopeLocal + frameId, ["expensive"] = true },
+            new JsonObject { ["name"] = "Global", ["variablesReference"] = ScopeGlobal, ["expensive"] = true },
+            new JsonObject { ["name"] = "Registers", ["variablesReference"] = ScopeRegisters, ["expensive"] = true });
+        if (await GetSvdAsync() is { } svd)
+            scopes.Add(new JsonObject
+            {
+                ["name"] = $"Peripherals ({svd.Name})",
+                ["variablesReference"] = ScopePeripherals,
+                ["expensive"] = true,
+            });
+        return new JsonObject { ["scopes"] = scopes };
+    }
+
+    private async Task<Svd.SvdDevice?> GetSvdAsync()
+    {
+        try
         {
-            ["scopes"] = new JsonArray(
-                new JsonObject { ["name"] = "Local", ["variablesReference"] = ScopeLocal + frameId, ["expensive"] = true },
-                new JsonObject { ["name"] = "Global", ["variablesReference"] = ScopeGlobal, ["expensive"] = true },
-                new JsonObject { ["name"] = "Registers", ["variablesReference"] = ScopeRegisters, ["expensive"] = true }),
-        };
+            return _svdTask == null ? null : await _svdTask;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("SVD load failed: {Message}", ex.Message);
+            return null;
+        }
     }
 
     private async Task<JsonObject> VariablesAsync(JsonObject args, CancellationToken cancellationToken)
@@ -420,6 +551,10 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
         {
             ScopeRegisters => await RegisterVariablesAsync(hex, cancellationToken),
             ScopeGlobal => await GlobalVariablesAsync(cancellationToken),
+            ScopePeripherals => await PeripheralsScopeAsync(),
+            >= ScopePeripheralGroup => await PeripheralGroupAsync(reference - ScopePeripheralGroup),
+            >= ScopePeripheralRegister => await PeripheralRegisterFieldsAsync(reference - ScopePeripheralRegister),
+            >= ScopePeripheral => await PeripheralRegistersAsync(reference - ScopePeripheral, cancellationToken),
             >= ScopeLocal => await LocalVariablesAsync(reference - ScopeLocal, cancellationToken),
             _ => await ExpandVariableAsync(reference, cancellationToken),
         };
@@ -555,6 +690,217 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
         }
         return result;
     }
+
+    // #region SVD peripheral scopes
+
+    private readonly Dictionary<Svd.SvdPeripheral, byte[][]> _peripheralData = [];
+
+    private async Task<JsonArray> PeripheralsScopeAsync()
+    {
+        var result = new JsonArray();
+        if (await GetSvdAsync() is not { } svd)
+            return result;
+
+        var grouped = new Dictionary<string, List<(int Index, Svd.SvdPeripheral Peripheral)>>();
+        foreach (var (peripheral, index) in svd.Peripherals.Select((p, i) => (p, i)))
+            (grouped.TryGetValue(peripheral.GroupName ?? "", out var list)
+                ? list
+                : grouped[peripheral.GroupName ?? ""] = []).Add((index, peripheral));
+
+        var rows = new List<JsonObject>();
+        foreach (var (group, peripherals) in grouped)
+        {
+            foreach (var (index, peripheral) in peripherals)
+            {
+                if (group.Length == 0 || peripherals.Count == 1)
+                {
+                    rows.Add(Row(peripheral.Name, peripheral.Description ?? peripheral.Name, ScopePeripheral + index));
+                }
+                else
+                {
+                    rows.Add(Row(group,
+                        peripheral.Description != null ? $"Group ({peripheral.Description})" : "Group",
+                        ScopePeripheralGroup + index));
+                    break;
+                }
+            }
+        }
+
+        foreach (var row in rows.OrderBy(r => r["name"]!.GetValue<string>(), NaturalComparer.Instance))
+            result.Add(row);
+        return result;
+
+        static JsonObject Row(string name, string value, int reference) => new()
+        {
+            ["name"] = name,
+            ["value"] = value,
+            ["variablesReference"] = reference,
+        };
+    }
+
+    private async Task<JsonArray> PeripheralGroupAsync(int index)
+    {
+        var result = new JsonArray();
+        if (await GetSvdAsync() is not { } svd || index >= svd.Peripherals.Count)
+            return result;
+
+        var groupName = svd.Peripherals[index].GroupName;
+        var rows = svd.Peripherals
+            .Select((p, i) => (Peripheral: p, Index: i))
+            .Where(x => x.Peripheral.GroupName == groupName)
+            .Select(x => new JsonObject
+            {
+                ["name"] = x.Peripheral.Name,
+                ["value"] = x.Peripheral.Description ?? x.Peripheral.Name,
+                ["variablesReference"] = ScopePeripheral + x.Index,
+            })
+            .OrderBy(r => r["name"]!.GetValue<string>(), NaturalComparer.Instance);
+        foreach (var row in rows)
+            result.Add(row);
+        return result;
+    }
+
+    private async Task<JsonArray> PeripheralRegistersAsync(int index, CancellationToken cancellationToken)
+    {
+        var result = new JsonArray();
+        if (await GetSvdAsync() is not { } svd || index >= svd.Peripherals.Count)
+            return result;
+
+        var peripheral = svd.Peripherals[index];
+
+        // A great time to (re)read the peripheral's memory blocks.
+        var data = new byte[peripheral.AddressBlocks.Count][];
+        for (var i = 0; i < data.Length; i++)
+        {
+            var block = peripheral.AddressBlocks[i];
+            data[i] = await Gdb.ReadMemoryAsync(peripheral.BaseAddress + (ulong)block.Offset, (int)block.Size,
+                cancellationToken);
+        }
+        _peripheralData[peripheral] = data;
+
+        var maxLength = peripheral.Registers.Count > 0 ? peripheral.Registers.Max(r => r.Name.Length) : 0;
+        foreach (var (register, i) in peripheral.Registers.Select((r, i) => (r, i)))
+        {
+            result.Add(new JsonObject
+            {
+                ["name"] = register.Name.PadRight(maxLength),
+                ["value"] = PeripheralRegisterValue(svd, peripheral, register, data) ?? "???",
+                ["variablesReference"] = register.Fields is { Count: > 0 }
+                    ? ScopePeripheralRegister + (index << 12) + i
+                    : 0,
+            });
+        }
+        return result;
+    }
+
+    private async Task<JsonArray> PeripheralRegisterFieldsAsync(int packed)
+    {
+        var result = new JsonArray();
+        if (await GetSvdAsync() is not { } svd)
+            return result;
+
+        var peripheralIndex = packed >> 12;
+        var registerIndex = packed & 0xFFF;
+        if (peripheralIndex >= svd.Peripherals.Count)
+            return result;
+        var peripheral = svd.Peripherals[peripheralIndex];
+        if (registerIndex >= peripheral.Registers.Count)
+            return result;
+        var register = peripheral.Registers[registerIndex];
+        if (register.Fields == null || !_peripheralData.TryGetValue(peripheral, out var data))
+            return result;
+
+        var maxLength = register.Fields.Count > 0 ? register.Fields.Max(f => f.Name.Length) : 0;
+        foreach (var field in register.Fields)
+        {
+            result.Add(new JsonObject
+            {
+                ["name"] = field.Name.PadRight(maxLength),
+                ["value"] = PeripheralRegisterValue(svd, peripheral, register, data, field) ?? "???",
+                ["variablesReference"] = 0,
+            });
+        }
+        return result;
+    }
+
+    /// <summary>Formats a register (or one bitfield of it) from the block data read earlier.</summary>
+    private static string? PeripheralRegisterValue(Svd.SvdDevice svd, Svd.SvdPeripheral peripheral,
+        Svd.SvdRegister register, byte[][] data, Svd.SvdField? field = null)
+    {
+        var bytes = register.Size / svd.AddressUnitBits;
+        var blockIndex = peripheral.AddressBlocks.FindIndex(b =>
+            register.AddressOffset >= b.Offset && register.AddressOffset + bytes <= b.Offset + b.Size);
+        if (blockIndex < 0)
+            return null;
+
+        var block = data[blockIndex];
+        var offset = (int)(register.AddressOffset - peripheral.AddressBlocks[blockIndex].Offset);
+        if (offset + bytes > block.Length)
+            return null;
+
+        ulong value = 0;
+        for (var i = 0; i < bytes; i++)
+            value |= (ulong)block[offset + i] << (8 * (svd.BigEndian ? bytes - 1 - i : i));
+
+        const string green = "\e[92m", cyan = "\e[96m", yellow = "\e[93m", reset = "\e[0m";
+        var parts = new List<string>();
+        if (field == null)
+        {
+            parts.Add($"{green}0x{value.ToString("x").PadLeft(bytes * 2, '0')}{reset}");
+            if (register.Description != null)
+                parts.Add($"({register.Description})");
+        }
+        else
+        {
+            value >>= field.BitOffset;
+            value &= field.BitWidth >= 64 ? ulong.MaxValue : (1ul << field.BitWidth) - 1;
+            parts.Add($"{cyan}{value}{reset}");
+            if (field.BitWidth > 3)
+                parts.Add($"{green}0x{value:x}{reset}");
+            if (field.BitWidth > 1)
+                parts.Add($"{yellow}0b{Convert.ToString((long)value, 2).PadLeft(field.BitWidth, '0')}{reset}");
+            if (field.Description != null)
+                parts.Add($"({field.Description})");
+        }
+        return string.Join(' ', parts);
+    }
+
+    /// <summary>Natural ("USART2" &lt; "USART10") string ordering for peripheral lists.</summary>
+    private sealed class NaturalComparer : IComparer<string>
+    {
+        public static readonly NaturalComparer Instance = new();
+
+        public int Compare(string? x, string? y)
+        {
+            x ??= "";
+            y ??= "";
+            int i = 0, j = 0;
+            while (i < x.Length && j < y.Length)
+            {
+                if (char.IsAsciiDigit(x[i]) && char.IsAsciiDigit(y[j]))
+                {
+                    var si = i;
+                    var sj = j;
+                    while (i < x.Length && char.IsAsciiDigit(x[i])) i++;
+                    while (j < y.Length && char.IsAsciiDigit(y[j])) j++;
+                    var cmp = long.Parse(x[si..i]).CompareTo(long.Parse(y[sj..j]));
+                    if (cmp != 0)
+                        return cmp;
+                }
+                else
+                {
+                    var cmp = char.ToUpperInvariant(x[i]).CompareTo(char.ToUpperInvariant(y[j]));
+                    if (cmp != 0)
+                        return cmp;
+                    i++;
+                    j++;
+                }
+            }
+            return (x.Length - i).CompareTo(y.Length - j);
+        }
+    }
+
+    // #endregion
 
     private sealed class GdbVar
     {
@@ -780,7 +1126,7 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
 
         try
         {
-            await ExecWhileStoppedAsync(() => SetCortexExceptionMaskAsync(mask, cancellationToken), cancellationToken);
+            await ExecWhileStoppedAsync(() => _cortex!.SetExceptionMaskAsync(mask, cancellationToken), cancellationToken);
         }
         catch (Exception ex)
         {
@@ -790,24 +1136,52 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
         return new JsonObject { ["breakpoints"] = new JsonArray() };
     }
 
-    /// <summary>Sets the Cortex-M vector-catch mask in DEMCR (the extension's Cortex.setExceptionMask).</summary>
-    private async Task SetCortexExceptionMaskAsync(int mask, CancellationToken cancellationToken)
-    {
-        const ulong romTable = 0xE00FF000;
-        const int scsDemcr = 0xDFC;
-
-        var rom = await Gdb.ReadMemoryAsync(romTable, 4, cancellationToken);
-        var scsEntry = BitConverter.ToUInt32(rom);
-        if ((scsEntry & 1) == 0)
-            throw new NotSupportedException("No SCS entry in the Cortex-M ROM table");
-        var scs = (uint)(romTable + (scsEntry & ~3u));
-
-        var demcr = BitConverter.ToUInt32(await Gdb.ReadMemoryAsync(scs + scsDemcr, 4, cancellationToken));
-        demcr = (uint)((demcr & ~0xFFFFu) | (uint)mask);
-        await Gdb.WriteMemoryAsync(scs + scsDemcr, BitConverter.GetBytes(demcr), cancellationToken);
-    }
-
     // #endregion
+
+    private async Task<JsonObject> DisassembleAsync(JsonObject args, CancellationToken cancellationToken)
+    {
+        var reference = args["memoryReference"]?.GetValue<string>()
+            ?? throw new ArgumentException("Invalid disassembly address");
+        var baseAddress = MiClient.ParseNumberLong(JsonValue.Create(reference))
+            + MiClient.ParseNumberLong(args["offset"]);
+
+        var cache = _disassemblyCache ??= new DisassemblyCache(async (address, ct) =>
+        {
+            var res = await Gdb.ExecuteAsync($"data-disassemble -a 0x{address:x} --opcodes bytes --source", ct);
+            return res.Results["asm_insns"] as JsonArray ?? [];
+        }, logger);
+
+        var instructions = await cache.FillAsync(
+            baseAddress,
+            MiClient.ParseNumber(args["instructionOffset"]),
+            MiClient.ParseNumber(args["count"]),
+            cancellationToken);
+
+        var mapped = new JsonArray();
+        foreach (var ins in instructions)
+        {
+            var entry = new JsonObject
+            {
+                ["address"] = ins.Start < 0 ? "-1" : $"0x{ins.Start:x}",
+                ["instruction"] = ins.Function != null && ins.Offset == 0
+                    ? $"{ins.Mnemonic}\t;;; FUNCTION: {ins.Function}"
+                    : ins.Mnemonic,
+            };
+            if (ins.Bytes != null)
+                entry["instructionBytes"] = ins.Bytes;
+            if (ins.Source is { } src)
+            {
+                entry["location"] = new JsonObject { ["name"] = src.File, ["path"] = src.FullName ?? src.File };
+                entry["line"] = src.Line;
+                if (src.EndLine is { } endLine)
+                    entry["endLine"] = endLine;
+            }
+            if (ins.Function != null)
+                entry["symbol"] = ins.Function;
+            mapped.Add(entry);
+        }
+        return new JsonObject { ["instructions"] = mapped };
+    }
 
     private async Task<JsonObject> ReadMemoryAsync(JsonObject args, CancellationToken cancellationToken)
     {

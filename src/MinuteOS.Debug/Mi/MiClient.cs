@@ -410,7 +410,16 @@ public sealed class MiClient : IAsyncDisposable
         if (node == null)
             return 0;
         if (node.GetValueKind() == System.Text.Json.JsonValueKind.Number)
-            return (long)node.GetValue<double>();
+        {
+            var value = node.AsValue();
+            if (value.TryGetValue(out long l))
+                return l;
+            if (value.TryGetValue(out int i))
+                return i;
+            if (value.TryGetValue(out double d))
+                return (long)d;
+            return 0;
+        }
         var s = node.GetValue<string>();
         return s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
             ? Convert.ToInt64(s[2..], 16)

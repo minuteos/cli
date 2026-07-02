@@ -7,3 +7,9 @@ configurations:
   qemu:
     target: cortex-m3
     config: Release
+  renode:
+    target: cortex-m3
+    config: Release
+    settings:
+      defines:
+        - USE_ITM

@@ -1,7 +1,8 @@
 # Integrating the tool with minute-debug (no duplicated code)
 
-Status: **phases 1 and 3 (core) are implemented in this repo**; the
-extension-side changes need work in [minuteos/vs-debugger].
+Status: **phases 1 and 3 are implemented in this repo** — the full debug
+engine is ported; what remains is the extension-side swap to
+`DebugAdapterExecutable` in [minuteos/vs-debugger].
 
 ## The problem
 
@@ -116,36 +117,61 @@ Port `gdb/mi*`, the server drivers, the SMU/SWO plumbing, and
 The extension drops to the frontend described above and its `src/` shrinks to
 UI + descriptor. From then on there is exactly one device/debug codebase.
 
-**Implemented (core).** `MinuteOS.Debug` now contains:
+**Implemented.** `MinuteOS.Debug` now contains:
 
 - `Mi/MiParser` + `Mi/MiClient` — the GDB/MI layer (`gdb --interpreter=mi2`,
   token-prefixed one-at-a-time commands, async record routing, per-thread
   run-state tracking with awaitable stopped/not-stopped gates) — the port of
   `gdb/mi.ts` + `gdb/instance.ts`.
-- `Servers/` — the `GdbServer` contract plus the qemu driver (spawns
-  `qemu-system-arm ... -gdb tcp:<port> -kernel <program> -S`, skipLoad) and the
-  BMP driver (serial-port autodetect, `monitor tpwr` / `swdp_scan` /
-  `attach 1` / `uid`) — the port of `gdb-server/`.
+- `Servers/` — the `GdbServer` contract plus three drivers, the port of
+  `gdb-server/`:
+  - **qemu**: `qemu-system-arm ... -gdb tcp:<port> -kernel <program> -S`,
+    skipLoad;
+  - **BMP**: serial-port autodetect, `monitor tpwr` / `swdp_scan` /
+    `attach 1` / `uid`;
+  - **renode**: `renode --disable-gui -p -P <port>` driven over its Telnet
+    monitor (`RenodeMonitor` + a Telnet option filter), script/commands/
+    machine selection, `machine StartGdbServer`, graceful `quit` on teardown,
+    and the include/overlay hooks (`i @file`,
+    `machine LoadPlatformDescription`) the SWO and framebuffer bridges use.
+    The Renode plugin peripherals (`MinuteItmCapture`, `MinuteRomTable`,
+    `MinuteFramebuffer`) are already C# — they moved over verbatim as
+    embedded resources, compiled *by Renode* at runtime.
 - `Probe` — gdb + server started in parallel, `target-select extended-remote`,
   attach, and the smart-load-aware `load` — the port of `probe/`.
+- `Cortex` — ROM-table discovery, DEMCR vector catch (exception breakpoints),
+  and the DWT/ITM/TPIU trace setup — the port of `gdb/cortex.ts`.
+- `Swo/` — the incremental ITM/DWT packet decoder (`SwoParser`), the session
+  that configures trace and drains the stream (`SwoSession`), and the sources:
+  **renode** (ITM capture + ROM table overlaid onto the user's platform, the
+  byte stream received over a loopback socket) and **BMP** (`swo enable` /
+  `traceswo enable` probed via `monitor help`; the stream is read from a
+  device path — automatic USB interface claim needs a USB stack and stays
+  extension-side for now). Stimulus port 0 becomes DAP `output` events.
+- `Svd/` — the CMSIS-SVD parser (`derivedFrom` resolution, register-size
+  inheritance, all three field bit-range notations), the on-disk cache over
+  the `cmsis-svd/cmsis-svd-data` index (x-wildcard model matching, largest
+  match wins; local `.svd` paths parse directly with no network), and the
+  DAP peripheral scopes: grouped peripherals → registers (block reads via
+  gdb) → decoded bitfields, ANSI-colored like the extension.
 - `Dap/DapConnection` + `Dap/DebugSession` — the DAP server:
   launch/attach (with `{config: name}` resolution through the build system),
-  breakpoints (source/instruction/exception via the Cortex-M DEMCR vector
-  catch), threads/stack/scopes, varobj-based locals/globals/expansion,
-  registers, evaluate (incl. `>console` and `-raw-mi` REPL passthrough),
-  stepping, pause, readMemory, and the stopped/continued/thread/output event
-  flow — the port of `debug-adapter/session.ts`.
+  breakpoints (source/instruction/exception), threads/stack/scopes,
+  varobj-based locals/globals/expansion, registers, SVD peripherals,
+  evaluate (incl. `>console` and `-raw-mi` REPL passthrough), stepping,
+  pause, readMemory, disassemble (via the ported range-caching
+  `DisassemblyCache`), and the stopped/continued/thread/output event flow —
+  the port of `debug-adapter/session.ts` + `disassembly.ts`.
 - `minuteos dap` — the whole thing over stdio (stdout is the protocol;
   diagnostics go to stderr).
 
 The end-to-end flow is validated by `tests/dap-e2e/` — a Python DAP client
-driving `minuteos dap` against the `cortex-m3-qemu` example under
-`qemu-system-arm` (breakpoint hit, locals/globals/registers, evaluate, step,
-semihosting output as DAP output events, pause, clean teardown).
-
-**Not ported yet:** the Renode server driver (its monitor protocol +
-framebuffer/ITM plugins), SWO decoding, the SVD peripheral scopes, and the
-disassembly cache (`supportsDisassembleRequest` is off until then).
+driving `minuteos dap` against the `cortex-m3-qemu` example twice: under
+**qemu** (breakpoint hit, locals/globals/registers, evaluate, disassembly,
+step, semihosting output as DAP output events, pause, clean teardown) and
+under **renode** (Telnet-monitor-driven server, ITM stimulus writes decoded
+into output events through the overlay, SVD peripheral scope reading a
+firmware-written register with bitfield decode, graceful quit).
 
 ## Crossing the in-process boundary
 
@@ -154,22 +180,23 @@ The extension today runs its DAP session **in-process**
 from the session. Moving the session behind `minuteos dap` puts a process
 boundary there, so each of those direct calls needs a DAP-shaped path:
 
-| In-process use | Out-of-process path |
+| In-process use | Out-of-process path (implemented unless noted) |
 |---|---|
-| `vscode.debug.activeDebugConsole.append(...)` (SWO ch0, console replies) | standard `output` events (already how `minuteos dap` forwards server/gdb output) |
-| `progress(...)` during load/flash | standard `progressStart`/`progressUpdate`/`progressEnd` events (the client advertises `supportsProgressReporting`) |
-| SVD tree view / peripheral UI | custom requests (`minuteos/svd`, ...) served by the adapter; the SVD cache moves to a filesystem cache shared by CLI and extension |
-| Renode framebuffer webview | already a socket side-channel today — the adapter just reports the endpoint in a custom event |
+| `vscode.debug.activeDebugConsole.append(...)` (SWO ch0, console replies) | standard `output` events — SWO stimulus port 0 and server/gdb output arrive this way |
+| `progress(...)` during load/flash | standard `progressStart`/`progressUpdate`/`progressEnd` events (the client advertises `supportsProgressReporting`) — not wired yet; load currently reports via `output` |
+| SVD tree view / peripheral UI | the adapter serves SVD *as DAP scopes* (Peripherals → registers → bitfields), so a stock DAP client gets the tree for free; the on-disk SVD cache under `~/.cache/minuteos/svd` is shareable with the extension |
+| Renode framebuffer webview | already a socket side-channel today — the adapter overlays the tap, relays the frame stream on a local port, and announces it with a `minuteos.display` custom event `{host, port}` |
 | config expansion + presets | resolved inside the adapter (`{config: name}` → build system), so the frontend needs no logic at all |
 
 Nothing in the session actually *requires* being in-process — the inline
-implementation was a convenience. The descriptor factory swap
+implementation was a convenience. The remaining step is entirely
+extension-side: swap the descriptor factory
 (`DebugAdapterInlineImplementation` → `DebugAdapterExecutable('minuteos',
-['dap'])`) is the last step, once the remaining pieces above are ported.
-
-Until then, the CLI's `Bmp.cs`/`StlinkSmu.cs` and the extension's
-drivers coexist deliberately — they are the same, small, protocol-level code,
-and phase 3 deletes the TS side rather than trying to share it.
+['dap'])`), render the `minuteos.display` stream in the webview, and delete
+the ported TS. One engine-side gap remains: BMP SWO capture reads from a
+device path rather than claiming the USB trace interface itself (that needs a
+user-space USB stack; the extension keeps doing it in-process until then, or
+the path can be provided by udev).
 
 ## Why not the inverse (extension as the engine, CLI delegates)?
 

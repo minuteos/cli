@@ -21,9 +21,13 @@ echo "== Scaffolding test project in $WORK"
 cp -r "$HERE/project/." "$WORK/"
 mkdir -p "$WORK/lib"
 cp -r "$REPO/examples/cortex-m3-qemu/targets" "$WORK/lib/targets"
+cp -r "$REPO/examples/cortex-m3-qemu/renode" "$WORK/renode"
 
 echo "== Building test program"
 (cd "$WORK" && dotnet "$CLI" build -c qemu -q)
+if command -v renode >/dev/null; then
+    (cd "$WORK" && dotnet "$CLI" build -c renode -q)
+fi
 
 echo "== Driving minuteos dap"
 MINUTEOS_DLL="$CLI" MINUTEOS_GDB="$GDB" python3 "$HERE/dap_client.py" "$WORK"

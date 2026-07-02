@@ -132,6 +132,8 @@ public class VscodeCommand : LoggingCommand
                     entry["server"] = MinuteDebugConfig.Server(config.Settings)!;
                     if (MinuteDebugConfig.Smu(config.Settings) is { } smu)
                         entry["smu"] = smu;
+                    if (MinuteDebugConfig.Swo(config.Settings) is { } swo)
+                        entry["swo"] = swo;
                     if (config.Settings.Scalar("debug.svd") is { } svd)
                         entry["svd"] = svd;
                     if (config.Settings.Scalar("debug.smart-load") is "false" or "off")

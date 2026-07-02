@@ -30,6 +30,8 @@ public static class MinuteDebugConfig
             model["server"] = server;
         if (Smu(config.Settings) is { } smu)
             model["smu"] = smu;
+        if (Swo(config.Settings) is { } swo)
+            model["swo"] = swo;
         if (config.Settings.Scalar("debug.svd") is { } svd)
             model["svd"] = svd;
         if (config.Settings.Scalar("debug.smart-load") is "false" or "off")
@@ -69,6 +71,10 @@ public static class MinuteDebugConfig
                 var renode = new JsonObject { ["type"] = "renode" };
                 if (s.Scalar("renode.script") is { } script) renode["script"] = script;
                 if (s.Scalar("renode.machine") is { } rmachine) renode["machine"] = rmachine;
+                if (s.List("renode.commands") is { Count: > 0 } commands)
+                    renode["commands"] = new JsonArray(commands.Select(c => (JsonNode)c).ToArray());
+                if (s.Scalar("renode.display") is { } display)
+                    renode["display"] = new JsonObject { ["peripheral"] = display };
                 return renode.Count > 1 ? renode : "renode";
             default:
                 return server; // a user-defined preset name
@@ -89,6 +95,21 @@ public static class MinuteDebugConfig
         if (IsOn(s.Scalar("smu.start-power-on"))) smu["startPowerOn"] = true;
         if (IsOn(s.Scalar("smu.stop-power-off"))) smu["stopPowerOff"] = true;
         return smu.Count > 1 ? smu : type;
+    }
+
+    /// <summary>The `swo` value from swo.* settings (null when unset).</summary>
+    public static JsonNode? Swo(Settings s)
+    {
+        if (s.Scalar("swo.type") is not { } type)
+            return null;
+
+        var swo = new JsonObject { ["type"] = type };
+        if (s.Scalar("swo.port") is { } port) swo["port"] = port;
+        if (int.TryParse(s.Scalar("swo.cpu-frequency"), out var cpu)) swo["cpuFrequency"] = cpu;
+        if (int.TryParse(s.Scalar("swo.swv-frequency"), out var swv)) swo["swvFrequency"] = swv;
+        if (s.Scalar("swo.format") is { } format)
+            swo["format"] = format.ToLowerInvariant() is "manchester" or "1" ? 1 : 2;
+        return swo.Count > 1 ? swo : type;
     }
 
     private static bool IsOn(string? value) => value is "true" or "on" or "1";

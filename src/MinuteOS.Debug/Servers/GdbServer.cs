@@ -50,8 +50,9 @@ public static class GdbServerFactory
         {
             "qemu" => new QemuGdbServer(config, program, cwd, logger),
             "bmp" => new BmpGdbServer(config, logger),
+            "renode" => new RenodeGdbServer(config, cwd, logger),
             _ => throw new NotSupportedException(
-                $"GDB server type '{type}' is not supported by `minuteos dap` yet (supported: qemu, bmp)"),
+                $"GDB server type '{type}' is not supported by `minuteos dap` (supported: qemu, bmp, renode)"),
         };
     }
 }
@@ -71,7 +72,15 @@ public abstract class ProcessGdbServer(ILogger logger) : IGdbServer
     protected abstract (string Executable, List<string> Args) GetCommandLine();
     protected virtual string? WorkingDirectory => null;
 
-    public Task StartAsync(CancellationToken cancellationToken = default)
+    protected bool ProcessRunning => _process is { HasExited: false };
+
+    public virtual Task StartAsync(CancellationToken cancellationToken = default)
+    {
+        StartProcess();
+        return Task.CompletedTask;
+    }
+
+    protected void StartProcess()
     {
         var (executable, args) = GetCommandLine();
         var psi = new ProcessStartInfo(executable)
@@ -88,7 +97,6 @@ public abstract class ProcessGdbServer(ILogger logger) : IGdbServer
         _process = Process.Start(psi) ?? throw new InvalidOperationException($"Failed to start {executable}");
         Forward(_process.StandardOutput);
         Forward(_process.StandardError);
-        return Task.CompletedTask;
 
         void Forward(StreamReader reader) => _ = Task.Run(async () =>
         {
@@ -100,8 +108,12 @@ public abstract class ProcessGdbServer(ILogger logger) : IGdbServer
     public virtual Task<TargetInfo> AttachAsync(MiClient mi, CancellationToken cancellationToken = default)
         => Task.FromResult(new TargetInfo());
 
-    public ValueTask DisposeAsync()
+    /// <summary>Runs before the server process is killed (graceful-shutdown hook).</summary>
+    protected virtual ValueTask DisposeCoreAsync() => ValueTask.CompletedTask;
+
+    public async ValueTask DisposeAsync()
     {
+        await DisposeCoreAsync();
         var process = _process;
         _process = null;
         if (process != null)
@@ -115,7 +127,16 @@ public abstract class ProcessGdbServer(ILogger logger) : IGdbServer
             process.Dispose();
         }
         GC.SuppressFinalize(this);
-        return ValueTask.CompletedTask;
+    }
+}
+
+internal static class TcpPort
+{
+    public static int Allocate()
+    {
+        using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        return ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
     }
 }
 
@@ -139,7 +160,7 @@ public sealed class QemuGdbServer : ProcessGdbServer
         _config = config;
         _program = program;
         _cwd = cwd;
-        _address = $"127.0.0.1:{AllocateTcpPort()}";
+        _address = $"127.0.0.1:{TcpPort.Allocate()}";
     }
 
     public override string Address => _address;
@@ -156,13 +177,6 @@ public sealed class QemuGdbServer : ProcessGdbServer
             args.AddRange(["-cpu", cpu]);
         args.AddRange(["-semihosting", "-nographic", "-gdb", $"tcp:{_address}", "-kernel", _program, "-S"]);
         return (_config["executable"]?.GetValue<string>() ?? "qemu-system-arm", args);
-    }
-
-    private static int AllocateTcpPort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 }
 

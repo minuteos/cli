@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<device>
+  <name>TESTCHIP</name>
+  <description>dap-e2e synthetic device</description>
+  <addressUnitBits>8</addressUnitBits>
+  <size>32</size>
+  <cpu><name>CM3</name><endian>little</endian></cpu>
+  <peripherals>
+    <peripheral>
+      <name>TESTP</name>
+      <description>Test peripheral backed by RAM</description>
+      <baseAddress>0x2000F000</baseAddress>
+      <addressBlock><offset>0</offset><size>0x10</size><usage>registers</usage></addressBlock>
+      <registers>
+        <register>
+          <name>MAGIC</name>
+          <description>Written by the firmware at startup</description>
+          <addressOffset>0x0</addressOffset>
+          <fields>
+            <field><name>LO</name><description>Low half</description><bitRange>[15:0]</bitRange></field>
+            <field><name>HI</name><description>High half</description><bitRange>[31:16]</bitRange></field>
+          </fields>
+        </register>
+      </registers>
+    </peripheral>
+  </peripherals>
+</device>
