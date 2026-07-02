@@ -21,6 +21,9 @@ public class VscodeCommand : LoggingCommand
     [Option("--force", "-f", Description = "Overwrite existing launch.json/tasks.json")]
     public bool Force { get; set; }
 
+    [Option("--slim", Description = "Emit minute-debug entries as `config` references resolved at debug time via `minuteos info --json` (requires extension support)")]
+    public bool Slim { get; set; }
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -115,16 +118,25 @@ public class VscodeCommand : LoggingCommand
                     ["name"] = $"{(request == "launch" ? "Launch" : "Attach")} {config.Name}",
                     ["type"] = "minute-debug",
                     ["request"] = request,
-                    ["cwd"] = "${workspaceRoot}",
-                    ["program"] = program,
-                    ["server"] = ServerConfig(config, server),
                 };
-                if (SmuConfig(config) is { } smu)
-                    entry["smu"] = smu;
-                if (config.Settings.Scalar("debug.svd") is { } svd)
-                    entry["svd"] = svd;
-                if (config.Settings.Scalar("debug.smart-load") is "false" or "off")
-                    entry["smartLoad"] = false;
+                if (Slim)
+                {
+                    // Resolved at debug time from `minuteos info -c <name> --json`
+                    // (never goes stale; requires extension support).
+                    entry["config"] = config.Name;
+                }
+                else
+                {
+                    entry["cwd"] = "${workspaceRoot}";
+                    entry["program"] = program;
+                    entry["server"] = MinuteDebugConfig.Server(config.Settings)!;
+                    if (MinuteDebugConfig.Smu(config.Settings) is { } smu)
+                        entry["smu"] = smu;
+                    if (config.Settings.Scalar("debug.svd") is { } svd)
+                        entry["svd"] = svd;
+                    if (config.Settings.Scalar("debug.smart-load") is "false" or "off")
+                        entry["smartLoad"] = false;
+                }
                 if (request == "launch")
                     entry["preLaunchTask"] = $"minuteos: build {config.Name}";
                 entries.Add(entry);
@@ -180,51 +192,6 @@ public class VscodeCommand : LoggingCommand
         return new JsonObject { ["version"] = "0.2.0", ["configurations"] = entries };
     }
 
-    /// <summary>
-    /// The minute-debug `server` value: the preset name alone when nothing is
-    /// customized, else an inline configuration object.
-    /// </summary>
-    private static JsonNode ServerConfig(BuildConfiguration config, string server)
-    {
-        var s = config.Settings;
-        switch (server.ToLowerInvariant())
-        {
-            case "bmp":
-                var bmp = new JsonObject { ["type"] = "bmp" };
-                if (s.Scalar("bmp.port") is { } port) bmp["port"] = port;
-                if (s.Scalar("bmp.power") is "true" or "on" or "1") bmp["power"] = true;
-                return bmp.Count > 1 ? bmp : "bmp";
-            case "qemu":
-                var qemu = new JsonObject { ["type"] = "qemu" };
-                if (s.Scalar("qemu.machine") is { } machine) qemu["machine"] = machine;
-                if (s.Scalar("qemu.cpu") is { } cpu) qemu["cpu"] = cpu;
-                return qemu.Count > 1 ? qemu : "qemu";
-            case "renode":
-                var renode = new JsonObject { ["type"] = "renode" };
-                if (s.Scalar("renode.script") is { } script) renode["script"] = script;
-                if (s.Scalar("renode.machine") is { } rmachine) renode["machine"] = rmachine;
-                return renode.Count > 1 ? renode : "renode";
-            default:
-                return server; // a user-defined preset name
-        }
-    }
-
-    /// <summary>The minute-debug `smu` value from smu.* settings (null when unset).</summary>
-    private static JsonNode? SmuConfig(BuildConfiguration config)
-    {
-        var s = config.Settings;
-        if (s.Scalar("smu.type") is not { } type)
-            return null;
-
-        var smu = new JsonObject { ["type"] = type };
-        if (s.Scalar("smu.port") is { } port) smu["port"] = port;
-        if (s.Scalar("smu.output") is { } output) smu["output"] = output;
-        if (double.TryParse(s.Scalar("smu.voltage"), System.Globalization.CultureInfo.InvariantCulture, out var v))
-            smu["voltage"] = v;
-        if (s.Scalar("smu.start-power-on") is "true" or "on" or "1") smu["startPowerOn"] = true;
-        if (s.Scalar("smu.stop-power-off") is "true" or "on" or "1") smu["stopPowerOff"] = true;
-        return smu.Count > 1 ? smu : type;
-    }
 
     private void WriteAlways(string path, JsonObject content)
     {

@@ -106,6 +106,14 @@ to any tool.
 
 ## VS Code integration
 
+The tool is the **single source of truth** for debug configuration:
+`minuteos info -c <cfg> --json` emits the resolved minute-debug launch model
+(program, gdb, server, smu, svd, the full settings bag) for the extension to
+consume at debug time — see
+[debugger integration](design/debugger-integration.md). `minuteos vscode
+--slim` emits launch entries that are just `{ "config": "<name>" }` references
+(requires extension support); the default emits fully inline entries.
+
 `minuteos vscode` generates `.vscode/`:
 
 - **launch.json** — `Launch <cfg>` / `Attach <cfg>` entries:

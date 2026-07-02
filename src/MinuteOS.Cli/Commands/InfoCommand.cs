@@ -12,6 +12,9 @@ public class InfoCommand : LoggingCommand
     [Option("--project", "-p", Description = "Project root directory")]
     public string? ProjectDir { get; set; }
 
+    [Option("--json", Description = "Emit the resolved debug/config model as JSON (machine-readable; consumed by minute-debug)")]
+    public bool Json { get; set; }
+
     public Task<int> ExecuteAsync(CancellationToken cancellationToken)
     {
         var projectRoot = ProjectConfig.GetProjectRoot(ProjectDir);
@@ -30,6 +33,23 @@ public class InfoCommand : LoggingCommand
         var configNames = Configuration != ""
             ? [Configuration]
             : projectConfig.ConfigurationNames.ToList();
+
+        if (Json)
+        {
+            // The single source of truth for debug configuration: the extension
+            // resolves `{ config: "<name>" }` launch configs by invoking this.
+            var models = new System.Text.Json.Nodes.JsonArray();
+            foreach (var configName in configNames)
+                models.Add(MinuteDebugConfig.Describe(
+                    BuildConfiguration.Create(projectConfig, configName, projectRoot)));
+            var output = models.Count == 1 ? models[0]! : models;
+            Console.WriteLine(output.ToJsonString(new System.Text.Json.JsonSerializerOptions
+            {
+                WriteIndented = true,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            }));
+            return Task.FromResult(0);
+        }
 
         foreach (var configName in configNames)
         {

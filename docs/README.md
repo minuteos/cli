@@ -34,5 +34,7 @@ Runnable projects under [`../examples`](../examples):
 Background and rationale (how the current model was reached):
 
 - [`design/task-graph.md`](design/task-graph.md) — the opaque-artifact task graph.
+- [`design/debugger-integration.md`](design/debugger-integration.md) — the plan
+  for sharing one device/debug implementation with the minute-debug extension.
 - [`design/generalized-spec.md`](design/generalized-spec.md) — the settings/steps
   groundwork it builds on.
