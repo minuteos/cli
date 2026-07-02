@@ -71,12 +71,15 @@ public static class DeviceSpecResolver
 
         if (string.IsNullOrWhiteSpace(command))
         {
-            // No explicit command: fall back to the J-Link provider.
-            if (JLinkDefaults(operation, config.Settings) is not var (jcmd, jargs, jscript))
+            // No explicit command: fall back to a probe provider - BMP (the
+            // minute-debug primary; `debug.server: bmp`) or J-Link (`jlink.device`).
+            var defaults = BmpDefaults(operation, config, image)
+                ?? JLinkDefaults(operation, config.Settings);
+            if (defaults is not var (dcmd, dargs, dscript))
                 return null;
-            command = jcmd;
-            argsTemplate ??= jargs;
-            script ??= jscript;
+            command = dcmd;
+            argsTemplate ??= dargs;
+            script ??= dscript;
         }
 
         var port = cfg.GetValueOrDefault("gdb-port", "3333");
@@ -108,9 +111,44 @@ public static class DeviceSpecResolver
     }
 
     /// <summary>
+    /// Built-in Black Magic Probe invocations, driven by <c>debug.server: bmp</c>
+    /// (the minute-debug extension's primary probe). The BMP is the gdb server on
+    /// a serial port, so flash/erase are one-shot gdb batch sessions - the same
+    /// mechanism the extension uses (scan, attach, load/monitor). Settings:
+    /// <c>bmp.port</c> (autodetected when omitted), <c>bmp.power</c> (probe-
+    /// supplied target power). There is no gdb-server operation - the debug
+    /// command attaches gdb directly to the probe.
+    /// </summary>
+    private static (string Command, string Args, string? Script)? BmpDefaults(
+        string operation, BuildConfiguration config, string image)
+    {
+        var settings = config.Settings;
+        if (!string.Equals(settings.Scalar("debug.server"), "bmp", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var port = settings.Scalar("bmp.port") ?? Bmp.FindPort()
+            ?? throw new InvalidOperationException(
+                "Failed to autodetect the Black Magic Probe port; set `bmp.port` or connect the probe.");
+        var power = settings.Scalar("bmp.power") is "true" or "on" or "1";
+        var gdb = (settings.Scalar("gcc.toolchain-prefix") ?? "") + "gdb";
+
+        List<string>? args = operation.ToLowerInvariant() switch
+        {
+            "flash" => Bmp.GdbBatchArgs(port, power, ["load"], image),
+            "erase" => Bmp.GdbBatchArgs(port, power, ["monitor erase_mass"], image: null),
+            _ => null,
+        };
+        if (args == null)
+            return null;
+
+        // Pre-tokenized: quote each argument so the tokenizer round-trips it.
+        return (gdb, string.Join(' ', args.Select(a => $"\"{a}\"")), null);
+    }
+
+    /// <summary>
     /// Built-in J-Link invocations for the standard operations, driven purely by
     /// settings: <c>jlink.device</c> (required), <c>jlink.interface</c> (SWD),
-    /// <c>jlink.speed</c> (4000). Matches the vsix/Make-era J-Link workflow.
+    /// <c>jlink.speed</c> (4000). Matches the Make-era J-Link workflow.
     /// </summary>
     private static (string Command, string Args, string? Script)? JLinkDefaults(string operation, Settings settings)
     {

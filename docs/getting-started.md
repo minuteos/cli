@@ -60,7 +60,7 @@ minuteos run   -c host      # build, then execute
 | `run -c <cfg>` | Build, then execute the image — directly (host) or via the target's `run` step (emulator). |
 | `test [-c <cfg>]` | Discover and run test suites (`-f` filter cases, `-s` filter suites, `--junit <file>` CI report). |
 | `info [-c <cfg>]` | Show the resolved configuration (targets, components, settings). |
-| `flash` / `erase` / `debug` | Device operations — synthesized from `jlink.device`, or explicit `Device` steps (see [device management](device.md)). |
+| `flash` / `erase` / `debug` / `power` | Device operations — synthesized from `debug.server: bmp` or `jlink.device`, or explicit `Device` steps; SMU power control (see [device management](device.md)). |
 | `vscode` | Generate `.vscode/` (Cortex-Debug launch configs, build tasks, IntelliSense). |
 | `restore` | Restore external dependencies (`--frozen`: use only locked commits). |
 | `graph [-c <cfg>]` | Show the build step graph (steps, artifact edges, order). |

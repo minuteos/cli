@@ -119,8 +119,29 @@ public class DebugCommand : DeviceCommandBase
 
     public async Task<int> ExecuteAsync(CancellationToken cancellationToken)
     {
-        if (await ResolveAsync(build: true, cancellationToken) is not var (config, projectRoot) ||
-            ResolveOperation(config, "gdb-server") is not { } spec)
+        if (await ResolveAsync(build: true, cancellationToken) is not var (config, projectRoot))
+            return 1;
+
+        // Black Magic Probe: the probe IS the gdb server on a serial port - no
+        // server process; attach gdb directly (matching the minute-debug flow:
+        // target extended-remote, swdp_scan, attach 1).
+        if (string.Equals(config.Settings.Scalar("debug.server"), "bmp", StringComparison.OrdinalIgnoreCase))
+        {
+            var bmpPort = config.Settings.Scalar("bmp.port") ?? Bmp.FindPort();
+            if (bmpPort == null)
+            {
+                Logger.LogError("Failed to autodetect the Black Magic Probe port; set `bmp.port` or connect the probe.");
+                return 1;
+            }
+            var bmpPower = config.Settings.Scalar("bmp.power") is "true" or "on" or "1";
+            var bmpGdb = (config.Settings.Scalar("gcc.toolchain-prefix") ?? "") + "gdb";
+            var attachArgs = Bmp.GdbAttachArgs(bmpPort, bmpPower, config.PrimaryOutput);
+
+            Logger.LogInformation("Attaching to BMP: {Gdb} {Args}", bmpGdb, string.Join(' ', attachArgs));
+            return await Interactive.RunAsync(bmpGdb, attachArgs, projectRoot, cancellationToken);
+        }
+
+        if (ResolveOperation(config, "gdb-server") is not { } spec)
             return 1;
 
         var port = spec.Config.GetValueOrDefault("gdb-port", "3333");

@@ -33,12 +33,56 @@ steps:
 Any configuration using that target inherits the operations; a config-level step
 overrides the target's (most specific wins).
 
-## J-Link: one setting for everything
+## Black Magic Probe: the minute-debug workflow
 
-The Make-era workflow (and the current VS Code extension) is J-Link based, with
-`JLINK_DEVICE` as the single per-board knob. The tool preserves that: a board
-that sets **`jlink.device`** gets all three operations synthesized — no command
-lines to write:
+The [minute-debug](https://github.com/minuteos/vs-debugger) extension's primary
+probe is the [Black Magic Probe](https://black-magic.org/) — the probe **is**
+the gdb server on a serial port, and flashing goes through gdb itself. A board
+that sets `debug.server: bmp` gets the same mechanism from the CLI:
+
+```yaml
+# targets/my-board/target.yaml
+settings:
+  debug.server: bmp
+  # bmp.port: /dev/ttyACM0     # autodetected via /dev/serial/by-id when omitted
+  # bmp.power: "true"           # probe-supplied target power (monitor tpwr)
+```
+
+- `flash` → `gdb --batch` with `target extended-remote <port>`,
+  `monitor swdp_scan`, `attach 1`, `load` (gdb's exit detaches and the target
+  runs) — exactly the extension's `flash()` flow.
+- `erase` → the same session with `monitor erase_mass`.
+- `debug` → attaches gdb directly to the probe (there is no server process).
+
+## SMU: target power (STLINK-V3PWR)
+
+The extension's SMU support (source-measure units; currently the STLINK-V3PWR)
+is ported as `minuteos power`:
+
+```yaml
+settings:
+  smu.type: stlink
+  # smu.port: /dev/ttyACM2     # autodetected (control channel, USB interface 1)
+  # smu.output: vout            # default
+  # smu.voltage: "3.3"           # default
+  # smu.start-power-on: "true"  # used by the generated launch config
+  # smu.stop-power-off: "true"
+```
+
+```bash
+minuteos power on          # volt vout 3300m; pwr vout on
+minuteos power off [-c cfg] [--voltage 3.3] [--output vout] [--port ...]
+```
+
+The driver speaks the V3PWR's line protocol (`power_monitor`,
+`format bin_hexa`, `volt <out> <mV>m`, `pwr <out> on|off`, `ack` responses) over
+a raw tty — a direct port of the extension's driver.
+
+## J-Link (legacy workflow)
+
+The Make-era workflow was J-Link based, with `JLINK_DEVICE` as the single
+per-board knob. That is still supported: a board that sets **`jlink.device`**
+gets all three operations synthesized — no command lines to write:
 
 ```yaml
 # targets/my-board/target.yaml
@@ -62,12 +106,15 @@ to any tool.
 
 ## VS Code integration
 
-`minuteos vscode` generates `.vscode/` for the [Cortex-Debug](https://marketplace.visualstudio.com/items?itemName=marus25.cortex-debug)
-extension — the port of the Make-era `VSCode.mk`:
+`minuteos vscode` generates `.vscode/`:
 
-- **launch.json** — `Launch <cfg>` / `Attach <cfg>` entries (type `cortex-debug`,
-  servertype `jlink`, the config's `jlink.device`, SWO console on stimulus port 0
-  at `jlink.swo-frequency`); launching builds first via the matching task.
+- **launch.json** — `Launch <cfg>` / `Attach <cfg>` entries:
+  - **`minute-debug`** for configurations with `debug.server` — server
+    (`bmp`/`qemu`/`renode`, inline when `bmp.port`/`bmp.power`/`qemu.machine`…
+    are set), `smu` from the `smu.*` settings, `svd` from `debug.svd`,
+    `smartLoad` (on unless `debug.smart-load: "false"`), build `preLaunchTask`.
+  - **`cortex-debug`** (servertype jlink + SWO console) for configurations with
+    `jlink.device` — the port of the Make-era `VSCode.mk`.
 - **tasks.json** — `minuteos: build <cfg>` tasks (first configuration is the
   default build task).
 - **c_cpp_properties.json** — IntelliSense from the generated
@@ -82,6 +129,7 @@ extension — the port of the Make-era `VSCode.mk`:
 | `minuteos erase [-c cfg] [-d serial]` | Run the `erase` step (no build). |
 | `minuteos debug [-c cfg]` | Build, start the `gdb-server` step in the background, attach `<toolchain-prefix>gdb {image}` via `target extended-remote localhost:<gdb-port>`, and kill the server when gdb exits. |
 | `minuteos debug --server-only` | Only run the gdb server in the foreground — for an IDE / editor extension to attach to. |
+| `minuteos power on\|off` | Drive target power via the configured SMU (STLINK-V3PWR). |
 
 All run with live, interactive stdio (you see the probe tool's output; gdb is
 fully interactive).

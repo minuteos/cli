@@ -93,12 +93,44 @@ public class VscodeCommand : LoggingCommand
     };
 
     /// <summary>
-    /// Cortex-Debug launch + attach entries (servertype jlink, SWO console on
-    /// stimulus port 0) for every configuration that sets <c>jlink.device</c>.
+    /// Debug launch entries: <c>minute-debug</c> (the minuteos debug adapter) for
+    /// configurations with <c>debug.server</c>, and legacy Cortex-Debug/J-Link
+    /// entries for configurations with <c>jlink.device</c>.
     /// </summary>
     private JsonObject Launch(string projectRoot, IReadOnlyList<BuildConfiguration> configs)
     {
         var entries = new JsonArray();
+
+        foreach (var config in configs)
+        {
+            var server = config.Settings.Scalar("debug.server");
+            if (string.IsNullOrEmpty(server))
+                continue;
+
+            var program = Path.GetRelativePath(projectRoot, config.PrimaryOutput).Replace('\\', '/');
+            foreach (var request in (string[])["launch", "attach"])
+            {
+                var entry = new JsonObject
+                {
+                    ["name"] = $"{(request == "launch" ? "Launch" : "Attach")} {config.Name}",
+                    ["type"] = "minute-debug",
+                    ["request"] = request,
+                    ["cwd"] = "${workspaceRoot}",
+                    ["program"] = program,
+                    ["server"] = ServerConfig(config, server),
+                };
+                if (SmuConfig(config) is { } smu)
+                    entry["smu"] = smu;
+                if (config.Settings.Scalar("debug.svd") is { } svd)
+                    entry["svd"] = svd;
+                if (config.Settings.Scalar("debug.smart-load") is "false" or "off")
+                    entry["smartLoad"] = false;
+                if (request == "launch")
+                    entry["preLaunchTask"] = $"minuteos: build {config.Name}";
+                entries.Add(entry);
+            }
+        }
+
         foreach (var config in configs)
         {
             var device = config.Settings.Scalar("jlink.device");
@@ -142,10 +174,56 @@ public class VscodeCommand : LoggingCommand
 
         if (entries.Count == 0)
             Logger.LogWarning(
-                "No configuration sets 'jlink.device'; launch.json will have no debug entries. " +
-                "Add `settings: {{ jlink.device: <JLinkDeviceName> }}` to a board target.");
+                "No configuration sets 'debug.server' (minute-debug) or 'jlink.device' (Cortex-Debug); " +
+                "launch.json will have no debug entries.");
 
         return new JsonObject { ["version"] = "0.2.0", ["configurations"] = entries };
+    }
+
+    /// <summary>
+    /// The minute-debug `server` value: the preset name alone when nothing is
+    /// customized, else an inline configuration object.
+    /// </summary>
+    private static JsonNode ServerConfig(BuildConfiguration config, string server)
+    {
+        var s = config.Settings;
+        switch (server.ToLowerInvariant())
+        {
+            case "bmp":
+                var bmp = new JsonObject { ["type"] = "bmp" };
+                if (s.Scalar("bmp.port") is { } port) bmp["port"] = port;
+                if (s.Scalar("bmp.power") is "true" or "on" or "1") bmp["power"] = true;
+                return bmp.Count > 1 ? bmp : "bmp";
+            case "qemu":
+                var qemu = new JsonObject { ["type"] = "qemu" };
+                if (s.Scalar("qemu.machine") is { } machine) qemu["machine"] = machine;
+                if (s.Scalar("qemu.cpu") is { } cpu) qemu["cpu"] = cpu;
+                return qemu.Count > 1 ? qemu : "qemu";
+            case "renode":
+                var renode = new JsonObject { ["type"] = "renode" };
+                if (s.Scalar("renode.script") is { } script) renode["script"] = script;
+                if (s.Scalar("renode.machine") is { } rmachine) renode["machine"] = rmachine;
+                return renode.Count > 1 ? renode : "renode";
+            default:
+                return server; // a user-defined preset name
+        }
+    }
+
+    /// <summary>The minute-debug `smu` value from smu.* settings (null when unset).</summary>
+    private static JsonNode? SmuConfig(BuildConfiguration config)
+    {
+        var s = config.Settings;
+        if (s.Scalar("smu.type") is not { } type)
+            return null;
+
+        var smu = new JsonObject { ["type"] = type };
+        if (s.Scalar("smu.port") is { } port) smu["port"] = port;
+        if (s.Scalar("smu.output") is { } output) smu["output"] = output;
+        if (double.TryParse(s.Scalar("smu.voltage"), System.Globalization.CultureInfo.InvariantCulture, out var v))
+            smu["voltage"] = v;
+        if (s.Scalar("smu.start-power-on") is "true" or "on" or "1") smu["startPowerOn"] = true;
+        if (s.Scalar("smu.stop-power-off") is "true" or "on" or "1") smu["stopPowerOff"] = true;
+        return smu.Count > 1 ? smu : type;
     }
 
     private void WriteAlways(string path, JsonObject content)
