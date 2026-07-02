@@ -19,6 +19,12 @@ public class BuildCommand : LoggingCommand
     [Option("--hash", Description = "Use content-hash fingerprints (mtime+size by default)")]
     public bool Hash { get; set; }
 
+    [Option("--dry-run", "-n", Description = "Report what would run and why, without building")]
+    public bool DryRun { get; set; }
+
+    [Option("--explain", Description = "Log why each action runs (its stale reason)")]
+    public bool Explain { get; set; }
+
     public async Task<int> ExecuteAsync(CancellationToken cancellationToken)
     {
         var projectRoot = ProjectConfig.GetProjectRoot(ProjectDir);
@@ -74,6 +80,8 @@ public class BuildCommand : LoggingCommand
             {
                 Parallelism = parallelism,
                 Fingerprinter = Hash ? new ContentHashFingerprinter() : null,
+                DryRun = DryRun,
+                Explain = Explain,
             };
             if (!await GraphRunner.BuildAsync(config, toolchain, Logger, options, cancellationToken: cancellationToken))
                 success = false;

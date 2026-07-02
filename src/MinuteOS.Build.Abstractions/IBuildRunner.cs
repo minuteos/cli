@@ -23,4 +23,15 @@ public sealed record BuildOptions
 
     /// <summary>Fingerprint strategy for the action cache (null = mtime+size).</summary>
     public IFingerprinter? Fingerprinter { get; init; }
+
+    /// <summary>
+    /// Plan and evaluate the cache, report what would run and why, but execute
+    /// nothing and leave the cache untouched. Settings augmenters and dynamic
+    /// scans still run (they are needed to plan); dynamic-output steps (e.g. a
+    /// transpiler) are shown as one action without expanding their downstream.
+    /// </summary>
+    public bool DryRun { get; init; }
+
+    /// <summary>Log why each executed action was not skipped (its stale reason).</summary>
+    public bool Explain { get; init; }
 }

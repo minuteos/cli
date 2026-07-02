@@ -47,24 +47,37 @@ public sealed class BuildCache
 
     /// <summary>True when the action can be skipped: same config, all outputs present,
     /// the declared-input set unchanged, and every recorded input still fingerprints equal.</summary>
-    public bool IsUpToDate(BuildAction action, string? configKey)
+    public bool IsUpToDate(BuildAction action, string? configKey) =>
+        GetStaleReason(action, configKey) == null;
+
+    /// <summary>
+    /// Why the action must run, or null when it is up to date. Drives
+    /// <c>--explain</c> / <c>--dry-run</c>.
+    /// </summary>
+    public string? GetStaleReason(BuildAction action, string? configKey)
     {
         if (!_entries.TryGetValue(action.Label, out var e))
-            return false;
+            return "not built before";
         if (e.ConfigKey != configKey)
-            return false;
-        if (e.Outputs.Any(o => IsFile(o) && !File.Exists(o)))
-            return false;
+            return "command/config changed";
+
+        var missingOutput = e.Outputs.FirstOrDefault(o => IsFile(o) && !File.Exists(o));
+        if (missingOutput != null)
+            return $"output missing: {Path.GetFileName(missingOutput)}";
 
         var declared = action.Inputs.Select(i => i.Id).Where(IsFile).ToHashSet(StringComparer.Ordinal);
         if (!declared.SetEquals(e.DeclaredInputs))
-            return false;
+            return "input set changed";
 
         foreach (var (path, fingerprint) in e.Inputs)
-            if (!File.Exists(path) || _fingerprinter.Compute(path) != fingerprint)
-                return false;
+        {
+            if (!File.Exists(path))
+                return $"input deleted: {Path.GetFileName(path)}";
+            if (_fingerprinter.Compute(path) != fingerprint)
+                return $"input changed: {Path.GetFileName(path)}";
+        }
 
-        return true;
+        return null;
     }
 
     public void Record(BuildAction action, ActionResult result, string? configKey)

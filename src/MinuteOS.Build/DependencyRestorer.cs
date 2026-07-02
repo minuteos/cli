@@ -51,8 +51,13 @@ public static partial class DependencyRestorer
         return DependencyLock.Load(projectRoot).Get(dep.Directory) ?? Unresolved;
     }
 
+    /// <param name="frozen">
+    /// Fail instead of re-resolving a mutable ref: builds must use exactly the
+    /// locked commits (CI safety). Pinned commits and paths are unaffected.
+    /// </param>
     public static async Task<IReadOnlyList<DependencyResult>> RestoreAsync(
-        ProjectConfig project, string projectRoot, ILogger logger, CancellationToken cancellationToken)
+        ProjectConfig project, string projectRoot, ILogger logger, CancellationToken cancellationToken,
+        bool frozen = false)
     {
         var results = new List<DependencyResult>();
         var locks = DependencyLock.Load(projectRoot);
@@ -73,7 +78,7 @@ public static partial class DependencyRestorer
             {
                 results.Add(dep.Kind == DependencyKind.Path
                     ? RestorePath(dep, projectRoot)
-                    : await RestoreRemoteAsync(dep, locks, logger, cancellationToken));
+                    : await RestoreRemoteAsync(dep, locks, frozen, logger, cancellationToken));
             }
             catch (Exception ex)
             {
@@ -94,7 +99,7 @@ public static partial class DependencyRestorer
     }
 
     private static async Task<DependencyResult> RestoreRemoteAsync(
-        Dependency dep, DependencyLock locks, ILogger logger, CancellationToken cancellationToken)
+        Dependency dep, DependencyLock locks, bool frozen, ILogger logger, CancellationToken cancellationToken)
     {
         var name = dep.Directory;
 
@@ -109,6 +114,14 @@ public static partial class DependencyRestorer
         else if (dep.RefIsCommit)
         {
             key = dep.Ref!;
+        }
+        else if (frozen)
+        {
+            // Frozen: mutable refs must already be locked; never re-resolve.
+            if (locks.Get(name) is not { } frozenCommit)
+                return new(name, $"ref '{dep.Ref ?? "HEAD"}' is not locked (run restore without --frozen)", false);
+            key = frozenCommit;
+            note = $"frozen at {Short(frozenCommit)}";
         }
         else
         {

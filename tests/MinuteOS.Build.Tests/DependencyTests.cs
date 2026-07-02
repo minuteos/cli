@@ -96,6 +96,42 @@ public class DependencyTests : IDisposable
     }
 
     [Fact]
+    public async Task Frozen_FailsOnUnlockedMutableRef_UsesLockOtherwise()
+    {
+        var cache = Path.Combine(_root, "cache");
+        Environment.SetEnvironmentVariable("MINUTEOS_CACHE", cache);
+        try
+        {
+            var project = Load(
+                "name: p\n" +
+                "dependencies:\n  - name: lib\n    git: https://example.invalid/lib\n    ref: main\n" +
+                "configurations:\n  host:\n    target: host\n    components: []\n");
+            var logger = Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+
+            // No lock entry: frozen restore must fail without touching the network.
+            var results = await DependencyRestorer.RestoreAsync(project, _root, logger, CancellationToken.None, frozen: true);
+            var r = Assert.Single(results);
+            Assert.False(r.Ok);
+            Assert.Contains("not locked", r.Status);
+
+            // Locked + cached: frozen restore succeeds offline.
+            File.WriteAllText(Path.Combine(_root, DependencyLock.FileName), "lib: abc1234def5678\n");
+            var dir = Path.Combine(cache, "lib", "abc1234def5678");
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "x"), "");
+
+            results = await DependencyRestorer.RestoreAsync(project, _root, logger, CancellationToken.None, frozen: true);
+            r = Assert.Single(results);
+            Assert.True(r.Ok, r.Status);
+            Assert.StartsWith("cached", r.Status);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MINUTEOS_CACHE", null);
+        }
+    }
+
+    [Fact]
     public void MissingDependencies_ReportsAbsentAndEmptyDirs()
     {
         var project = Load(

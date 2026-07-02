@@ -4,9 +4,9 @@ namespace MinuteOS.Build.Graph;
 
 /// <summary>
 /// The toolchain-agnostic core: wires steps into a graph by property match,
-/// topologically orders them, and runs their actions. Stage 1 is sequential with a
-/// per-action up-to-date check; parallelism and a fingerprint cache layer on later
-/// behind the same step contract (docs/design/task-graph.md).
+/// topologically orders them, and runs their actions in dependency waves with a
+/// fingerprint cache (docs/design/task-graph.md). Supports dry-run (report what
+/// would run, execute nothing) and explain (log each action's stale reason).
 /// </summary>
 public sealed class BuildEngine
 {
@@ -14,14 +14,23 @@ public sealed class BuildEngine
     private readonly ILogger _logger;
     private readonly int _parallelism;
     private readonly IFingerprinter _fingerprinter;
+    private readonly bool _dryRun;
+    private readonly bool _explain;
     private readonly object _sync = new(); // guards pool / cache / seen across concurrent steps
 
-    public BuildEngine(Toolchain toolchain, ILogger logger, int parallelism = 0, IFingerprinter? fingerprinter = null)
+    // Dry-run only: outputs of actions that would run, so downstream actions can be
+    // reported as stale-by-dependency even though those outputs weren't rebuilt.
+    private readonly HashSet<string> _wouldChange = new(StringComparer.Ordinal);
+
+    public BuildEngine(Toolchain toolchain, ILogger logger, BuildOptions? options = null)
     {
+        options ??= new BuildOptions();
         _toolchain = toolchain;
         _logger = logger;
-        _parallelism = parallelism > 0 ? parallelism : Environment.ProcessorCount;
-        _fingerprinter = fingerprinter ?? new MtimeSizeFingerprinter();
+        _parallelism = options.Parallelism > 0 ? options.Parallelism : Environment.ProcessorCount;
+        _fingerprinter = options.Fingerprinter ?? new MtimeSizeFingerprinter();
+        _dryRun = options.DryRun;
+        _explain = options.Explain;
     }
 
     public async Task<bool> RunAsync(
@@ -98,13 +107,17 @@ public sealed class BuildEngine
         }
 
         // Drop vanished actions, delete their orphaned outputs, persist the cache.
-        cache.RetainOnly(seen);
-        foreach (var orphan in cache.Orphans())
+        // A dry run must leave the cache and outputs untouched.
+        if (!_dryRun)
         {
-            try { File.Delete(orphan); _logger.LogDebug("Removed orphan {File}", orphan); }
-            catch { /* best effort */ }
+            cache.RetainOnly(seen);
+            foreach (var orphan in cache.Orphans())
+            {
+                try { File.Delete(orphan); _logger.LogDebug("Removed orphan {File}", orphan); }
+                catch { /* best effort */ }
+            }
+            cache.Save();
         }
-        cache.Save();
 
         return true;
     }
@@ -178,11 +191,35 @@ public sealed class BuildEngine
                 foreach (var action in ready)
                 {
                     seen.Add(action.Label);
-                    if (!action.AlwaysRun && cache.IsUpToDate(action, action.ConfigKey))
+                    var reason = action.AlwaysRun ? "always runs" : cache.GetStaleReason(action, action.ConfigKey);
+                    if (_dryRun && reason == null)
+                    {
+                        // Up to date per the cache, but stale if an input would be
+                        // rebuilt by an upstream action this dry run reported.
+                        var dep = action.Inputs.FirstOrDefault(i => _wouldChange.Contains(i.Id));
+                        if (dep != null)
+                            reason = $"depends on rebuilt {Path.GetFileName(dep.Id)}";
+                    }
+                    if (reason == null)
                     {
                         pool.AddRange(action.Outputs);
                         continue;
                     }
+                    if (_dryRun)
+                    {
+                        // Report; publish declared outputs so downstream steps still
+                        // plan (dynamic outputs can't be predicted without running).
+                        _logger.LogInformation("would run: {Label}  ({Reason})", action.Label, reason);
+                        // AlwaysRun actions (scans, report writers) republish rather
+                        // than change their outputs - don't propagate through them.
+                        if (!action.AlwaysRun)
+                            foreach (var o in action.Outputs)
+                                _wouldChange.Add(o.Id);
+                        pool.AddRange(action.Outputs);
+                        continue;
+                    }
+                    if (_explain)
+                        _logger.LogInformation("  {Label}: {Reason}", action.Label, reason);
                     foreach (var output in action.Outputs)
                         EnsureDirectory(output.Id);
                     toRun.Add(action);

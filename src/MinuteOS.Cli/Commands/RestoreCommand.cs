@@ -9,6 +9,9 @@ public class RestoreCommand : LoggingCommand
     [Option("--project", "-p", Description = "Project root directory")]
     public string? ProjectDir { get; set; }
 
+    [Option("--frozen", Description = "Fail instead of re-resolving mutable refs; use only the locked commits (CI safety)")]
+    public bool Frozen { get; set; }
+
     public async Task<int> ExecuteAsync(CancellationToken cancellationToken)
     {
         var projectRoot = ProjectConfig.GetProjectRoot(ProjectDir);
@@ -24,7 +27,7 @@ public class RestoreCommand : LoggingCommand
             return 1;
         }
 
-        var results = await DependencyRestorer.RestoreAsync(project, projectRoot, Logger, cancellationToken);
+        var results = await DependencyRestorer.RestoreAsync(project, projectRoot, Logger, cancellationToken, Frozen);
 
         var anyFailure = false;
         foreach (var r in results)

@@ -53,13 +53,15 @@ public static class GraphRunner
                 logger.LogWarning("Unknown build step '{Name}'; skipping.", stepRef.Name);
         }
 
-        var engine = new BuildEngine(toolchain, logger, options.Parallelism, options.Fingerprinter);
+        var engine = new BuildEngine(toolchain, logger, options);
         var ok = await engine.RunAsync(steps, config, cancellationToken, quiet);
 
         if (ok && !quiet)
         {
             logger.LogInformation("");
-            logger.LogInformation("Build succeeded: {Output}", config.PrimaryOutput);
+            logger.LogInformation(options.DryRun
+                ? "Dry run complete (nothing was built)."
+                : "Build succeeded: {Output}", config.PrimaryOutput);
         }
         return ok;
     }
