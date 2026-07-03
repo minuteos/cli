@@ -16,7 +16,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="triaxis.CommandLine.Tool" Version="2.0.0" />
+    <PackageReference Include="triaxis.CommandLine.Tool" Version="2.5.1" />
   </ItemGroup>
 
   <ItemGroup>
