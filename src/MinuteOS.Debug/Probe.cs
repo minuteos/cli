@@ -19,6 +19,7 @@ public sealed class Probe(ProbeConfig config, ILogger logger) : IAsyncDisposable
 
     private MiClient? _gdb;
     private IGdbServer? _server;
+    private SessionSmu? _smu;
 
     public MiClient Gdb => _gdb ?? throw new InvalidOperationException("GDB not started");
     public IGdbServer Server => _server ?? throw new InvalidOperationException("Not connected");
@@ -26,6 +27,10 @@ public sealed class Probe(ProbeConfig config, ILogger logger) : IAsyncDisposable
 
     public async Task ConnectAsync(CancellationToken cancellationToken = default)
     {
+        // Target power comes up before gdb attaches so swdp_scan can see the
+        // device; it is cut on teardown (see DisposeAsync).
+        _smu = SessionSmu.Create(config.Smu, logger);
+
         _gdb = new MiClient(logger);
         _server = GdbServerFactory.Create(config.Server, config.Program, config.Cwd, logger);
         if (config.ServerOutput is { } serverOutput)
@@ -95,6 +100,9 @@ public sealed class Probe(ProbeConfig config, ILogger logger) : IAsyncDisposable
             await _gdb.DisposeAsync();
         if (_server != null)
             await _server.DisposeAsync();
+        // Cut target power last, once gdb has detached and the server is gone.
+        if (_smu != null)
+            await _smu.DisposeAsync();
     }
 }
 
@@ -107,6 +115,8 @@ public sealed class ProbeConfig
     public required string Gdb { get; init; }
     /// <summary>The `server` config value: a preset name or an inline object.</summary>
     public required JsonNode Server { get; init; }
+    /// <summary>The `smu` config value (a preset name or an inline object), or null.</summary>
+    public JsonNode? Smu { get; init; }
     public string? Cwd { get; init; }
     public bool SmartLoad { get; init; } = true;
     /// <summary>Receives gdb-server console lines.</summary>

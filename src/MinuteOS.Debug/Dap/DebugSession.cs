@@ -147,6 +147,7 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
             Gdb = config["gdb"]?.GetValue<string>() ?? "gdb",
             Server = config["server"]
                 ?? throw new InvalidOperationException("Launch configuration has no 'server'"),
+            Smu = config["smu"],
             Cwd = cwd,
             SmartLoad = config["smartLoad"]?.GetValue<bool>() ?? true,
             ServerOutput = line => _ = SendOutputAsync("stdout", line + "\n"),
