@@ -77,6 +77,8 @@ pie) and a downsampled power/log series (the chart) - through one query core
 **Live**, over the running session:
 
 - `minuteos.timeline.start` / `.stop` - begin/stop retaining samples and ticking.
+  `start` also turns on DWT PC sampling (reference-counted with the profiler, a
+  no-op without SWO), so the pie populates without a separate profiling step.
 - `minuteos.timeline` event `{ now }` - a ~250 ms tick prompting the client to pull.
 - `minuteos.timeline.histogram` `{ from?, to?, granularity?, top? }` - PC buckets.
 - `minuteos.timeline.series` `{ from?, to?, maxPoints? }` - power points + logs.
