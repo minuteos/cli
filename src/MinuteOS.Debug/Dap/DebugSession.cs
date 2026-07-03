@@ -44,6 +44,7 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
     private Trace.Symbolizer? _symbolizer;
     private long _timelineStart;
     private CancellationTokenSource? _timelineTick;
+    private int _pcSamplingRefs;
 
     private readonly Dictionary<int, JsonObject> _frameIdMap = [];
     private readonly Dictionary<object, GdbVar> _varMap = [];
@@ -102,8 +103,8 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
                 "minuteos.profile.stop" => await ProfileStopAsync(args, cancellationToken),
                 "minuteos.trace.start" => await TraceStartAsync(args, cancellationToken),
                 "minuteos.trace.stop" => await TraceStopAsync(cancellationToken),
-                "minuteos.timeline.start" => TimelineStart(),
-                "minuteos.timeline.stop" => TimelineStop(),
+                "minuteos.timeline.start" => await TimelineStart(cancellationToken),
+                "minuteos.timeline.stop" => await TimelineStop(cancellationToken),
                 "minuteos.timeline.histogram" => TimelineHistogram(args),
                 "minuteos.timeline.series" => TimelineSeries(args),
                 _ => throw new NotSupportedException($"Unsupported request '{command}'"),
@@ -274,9 +275,36 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
             throw new InvalidOperationException("Profiling needs SWO - configure 'swo' in the launch configuration");
 
         _profiler.Reset();
-        await ExecWhileStoppedAsync(() => _cortex!.SetPcSamplingAsync(true, cancellationToken), cancellationToken);
+        if (!_profiler.Enabled)
+            await AcquirePcSamplingAsync(cancellationToken);
         _profiler.Enabled = true;
         return null;
+    }
+
+    // DWT PC sampling has two independent owners - the profiler and the timeline
+    // pie - so it is reference-counted: the hardware bit flips on the first
+    // acquire and off on the last release. A no-op without SWO (no PC packets).
+
+    private async Task AcquirePcSamplingAsync(CancellationToken cancellationToken)
+    {
+        if (_swoSession == null || _cortex == null)
+            return;
+        if (_pcSamplingRefs++ == 0)
+            await ExecWhileStoppedAsync(() => _cortex.SetPcSamplingAsync(true, cancellationToken), cancellationToken);
+    }
+
+    private async Task ReleasePcSamplingAsync(CancellationToken cancellationToken)
+    {
+        if (_cortex == null || _pcSamplingRefs == 0 || --_pcSamplingRefs != 0)
+            return;
+        try
+        {
+            await ExecWhileStoppedAsync(() => _cortex.SetPcSamplingAsync(false, cancellationToken), cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug("Disabling PC sampling failed: {Message}", ex.Message);
+        }
     }
 
     /// <summary>
@@ -286,17 +314,10 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
     /// </summary>
     private async Task<JsonObject> ProfileStopAsync(JsonObject args, CancellationToken cancellationToken)
     {
-        _profiler.Enabled = false;
-        if (_swoSession != null && _cortex != null)
+        if (_profiler.Enabled)
         {
-            try
-            {
-                await ExecWhileStoppedAsync(() => _cortex.SetPcSamplingAsync(false, cancellationToken), cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                logger.LogDebug("Disabling PC sampling failed: {Message}", ex.Message);
-            }
+            _profiler.Enabled = false;
+            await ReleasePcSamplingAsync(cancellationToken);
         }
 
         Func<uint, FunctionSymbol?> resolve;
@@ -382,19 +403,29 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
     /// the visible window. The pie needs PC sampling enabled (profiling or
     /// swo.profile) for PC events to flow.
     /// </summary>
-    private JsonObject TimelineStart()
+    private async Task<JsonObject> TimelineStart(CancellationToken cancellationToken)
     {
+        if (_timeline != null)
+            return new JsonObject { ["running"] = true };
+
         _timeline = new Trace.TimelineStore();
         _timelineStart = System.Diagnostics.Stopwatch.GetTimestamp();
         _symbolizer ??= Trace.Symbolizer.TryLoad(_programPath);
+        // Populate the PC pie without a separate "start profiling" step (no-op
+        // when there is no SWO to sample from).
+        await AcquirePcSamplingAsync(cancellationToken);
         StartTimelineTicks();
         return new JsonObject { ["running"] = true };
     }
 
-    private JsonObject TimelineStop()
+    private async Task<JsonObject> TimelineStop(CancellationToken cancellationToken)
     {
         StopTimelineTicks();
-        _timeline = null;
+        if (_timeline != null)
+        {
+            _timeline = null;
+            await ReleasePcSamplingAsync(cancellationToken);
+        }
         return new JsonObject { ["running"] = false };
     }
 
@@ -571,7 +602,10 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
 
     private void SendExecEvents()
     {
-        if (_suppressExecEvents > 0)
+        // A late thread-state notification can arrive after teardown (the
+        // ThreadsChanged subscription outlives the probe); ignore it rather than
+        // touch the disposed gdb.
+        if (_suppressExecEvents > 0 || _terminated || _probe is null)
             return;
 
         var seen = new HashSet<int>();
