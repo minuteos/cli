@@ -104,25 +104,37 @@ public sealed class StlinkSmu : IDisposable
     {
         amps = 0;
         var s = line.Trim();
-        var split = -1;
+        // Some formats prefix a record index / timestamp; the value is the last token.
+        var space = s.LastIndexOfAny([' ', '\t']);
+        if (space >= 0)
+            s = s[(space + 1)..];
+        if (s.Length == 0)
+            return false;
+
+        var culture = System.Globalization.CultureInfo.InvariantCulture;
+        const System.Globalization.NumberStyles floatStyle = System.Globalization.NumberStyles.Float;
+
+        // Primary form: integer mantissa, a sign directly after a digit, then an
+        // integer exponent ("5000-9" = 5000×10^-9).
         for (var i = 1; i < s.Length; i++)
         {
             if ((s[i] == '+' || s[i] == '-') && char.IsDigit(s[i - 1]))
             {
-                split = i;
-                break;
+                if (double.TryParse(s[..i], floatStyle, culture, out var mantissa)
+                    && int.TryParse(s[(i + 1)..], out var exponent))
+                {
+                    amps = mantissa * System.Math.Pow(10, s[i] == '-' ? -exponent : exponent);
+                    return true;
+                }
+                return false;
             }
         }
-        if (split < 0)
-            return false;
 
-        var culture = System.Globalization.CultureInfo.InvariantCulture;
-        if (!double.TryParse(s[..split], System.Globalization.NumberStyles.Float, culture, out var mantissa)
-            || !int.TryParse(s[(split + 1)..], out var exponent))
-            return false;
-
-        amps = mantissa * System.Math.Pow(10, s[split] == '-' ? -exponent : exponent);
-        return true;
+        // Defensive fallback: a firmware emitting a plain float value in amperes
+        // ("1.234e-6", "0.000005"). A bare integer is rejected - it is ambiguous
+        // and never the ST format.
+        return (s.Contains('.') || s.Contains('e') || s.Contains('E'))
+            && double.TryParse(s, floatStyle, culture, out amps);
     }
 
     /// <summary>
