@@ -68,6 +68,10 @@ public sealed class StlinkSmuSampleSource : ISmuSampleSource
 
     private void ReadLoop()
     {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var samples = 0L;
+        var warned = false;
+
         while (!_cts.IsCancellationRequested)
         {
             string? line;
@@ -77,11 +81,29 @@ public sealed class StlinkSmuSampleSource : ISmuSampleSource
             }
             catch (Exception ex)
             {
-                _logger.LogDebug("SMU stream read ended: {Message}", ex.Message);
+                _logger.LogWarning("SMU stream ended: {Message}", ex.Message);
                 break;
             }
+
             if (line != null && StlinkSmu.TryParseAmps(line, out var amps))
-                Sample?.Invoke(new SmuSample(CurrentChannel, (long)Math.Round(amps * 1e9)));
+            {
+                samples++;
+                try
+                {
+                    // A faulting consumer must not kill the reader.
+                    Sample?.Invoke(new SmuSample(CurrentChannel, (long)Math.Round(amps * 1e9)));
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug("SMU sample handler threw: {Message}", ex.Message);
+                }
+            }
+            else if (!warned && samples == 0
+                && System.Diagnostics.Stopwatch.GetElapsedTime(started) > TimeSpan.FromSeconds(3))
+            {
+                warned = true;
+                _logger.LogWarning("SMU: no current samples after 3s - is the output powered and streaming?");
+            }
         }
     }
 

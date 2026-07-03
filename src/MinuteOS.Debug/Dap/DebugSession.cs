@@ -392,6 +392,9 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
             _smuSource = _probe?.Smu?.CreateSampleSource() ?? new Trace.NullSmuSampleSource();
             _smuSource.Sample += OnSmuSample;
             await _smuSource.StartAsync(cancellationToken);
+            if (_smuSource.Channels.Count > 0)
+                await SendOutputAsync("console",
+                    $"SMU: streaming current from {_smuSource.Channels[0].Name}\n");
         }
         return _smuSource!;
     }
