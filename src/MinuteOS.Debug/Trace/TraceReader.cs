@@ -15,6 +15,13 @@ public sealed class TraceReader
 
     public TraceHeader Header { get; }
 
+    /// <summary>
+    /// True once <see cref="Events"/> has stopped on a partial trailing record -
+    /// the hallmark of a recorder killed mid-write. Everything up to it is still
+    /// yielded; consumers can surface this to explain a short trace.
+    /// </summary>
+    public bool Truncated { get; private set; }
+
     public TraceReader(Stream stream)
     {
         _stream = stream;
@@ -35,74 +42,111 @@ public sealed class TraceReader
 
     public IEnumerable<TraceEvent> Events()
     {
-        long timeNs = 0;
-        uint lastPc = 0;
-        var lastValue = new Dictionary<int, long>();
-
-        while (Varint.TryReadUnsigned(_stream, out var delta))
+        var state = new DecodeState();
+        while (true)
         {
-            timeNs += (long)delta;
-            var tagByte = _stream.ReadByte();
-            if (tagByte < 0)
-                throw new EndOfStreamException("Truncated record (missing tag)");
-
-            if (tagByte >= TraceFormat.ExtensionTag)
+            TraceEvent? evt;
+            try
             {
-                Skip((long)Varint.ReadUnsigned(_stream));
-                continue;
+                if (!TryReadRecord(state, out evt))
+                    yield break; // clean end of stream at a record boundary
+            }
+            catch (EndOfStreamException)
+            {
+                // A recorder killed mid-write leaves a partial trailing record.
+                // Delta-coding makes anything past it undecodable anyway, so stop
+                // cleanly and let the caller see what was recorded up to here.
+                Truncated = true;
+                yield break;
             }
 
-            switch ((TraceTag)tagByte)
-            {
-                case TraceTag.PcSample:
-                    lastPc = (uint)(lastPc + Varint.ReadSigned(_stream));
-                    yield return new PcSampleEvent(timeNs, lastPc, Sleep: false);
-                    break;
-
-                case TraceTag.PcSleep:
-                    yield return new PcSampleEvent(timeNs, 0, Sleep: true);
-                    break;
-
-                case TraceTag.Log:
-                {
-                    var port = (int)Varint.ReadUnsigned(_stream);
-                    var data = ReadBytes((int)Varint.ReadUnsigned(_stream));
-                    yield return new LogEvent(timeNs, port, data);
-                    break;
-                }
-
-                case TraceTag.Measurement:
-                {
-                    var channel = (int)Varint.ReadUnsigned(_stream);
-                    lastValue.TryGetValue(channel, out var last);
-                    var value = last + Varint.ReadSigned(_stream);
-                    lastValue[channel] = value;
-                    yield return new MeasurementEvent(timeNs, channel, value);
-                    break;
-                }
-
-                case TraceTag.ChannelDef:
-                {
-                    var channel = (int)Varint.ReadUnsigned(_stream);
-                    var kind = (ChannelKind)ReadByteChecked();
-                    Span<byte> scaleBytes = stackalloc byte[8];
-                    _stream.ReadExactly(scaleBytes);
-                    var scale = BinaryPrimitives.ReadDoubleLittleEndian(scaleBytes);
-                    var name = ReadString();
-                    var unit = ReadString();
-                    lastValue[channel] = 0;
-                    yield return new ChannelDefEvent(timeNs, channel, kind, scale, name, unit);
-                    break;
-                }
-
-                case TraceTag.Mark:
-                    yield return new MarkEvent(timeNs, (MarkKind)ReadByteChecked(), ReadString());
-                    break;
-
-                default:
-                    throw new InvalidDataException($"Unknown core trace tag 0x{tagByte:x2}");
-            }
+            if (evt != null)
+                yield return evt;
         }
+    }
+
+    private sealed class DecodeState
+    {
+        public long TimeNs;
+        public uint LastPc;
+        public readonly Dictionary<int, long> LastValue = [];
+    }
+
+    /// <summary>
+    /// Reads one record, advancing <paramref name="state"/>. Returns false at a
+    /// clean record boundary EOF; sets <paramref name="evt"/> to null for a
+    /// skipped extension record. Throws <see cref="EndOfStreamException"/> on a
+    /// truncated record and <see cref="InvalidDataException"/> on an unknown tag.
+    /// </summary>
+    private bool TryReadRecord(DecodeState state, out TraceEvent? evt)
+    {
+        evt = null;
+        if (!Varint.TryReadUnsigned(_stream, out var delta))
+            return false;
+
+        state.TimeNs += (long)delta;
+        var tagByte = _stream.ReadByte();
+        if (tagByte < 0)
+            throw new EndOfStreamException("Truncated record (missing tag)");
+
+        if (tagByte >= TraceFormat.ExtensionTag)
+        {
+            Skip((long)Varint.ReadUnsigned(_stream));
+            return true;
+        }
+
+        switch ((TraceTag)tagByte)
+        {
+            case TraceTag.PcSample:
+                state.LastPc = (uint)(state.LastPc + Varint.ReadSigned(_stream));
+                evt = new PcSampleEvent(state.TimeNs, state.LastPc, Sleep: false);
+                break;
+
+            case TraceTag.PcSleep:
+                evt = new PcSampleEvent(state.TimeNs, 0, Sleep: true);
+                break;
+
+            case TraceTag.Log:
+            {
+                var port = (int)Varint.ReadUnsigned(_stream);
+                var data = ReadBytes((int)Varint.ReadUnsigned(_stream));
+                evt = new LogEvent(state.TimeNs, port, data);
+                break;
+            }
+
+            case TraceTag.Measurement:
+            {
+                var channel = (int)Varint.ReadUnsigned(_stream);
+                state.LastValue.TryGetValue(channel, out var last);
+                var value = last + Varint.ReadSigned(_stream);
+                state.LastValue[channel] = value;
+                evt = new MeasurementEvent(state.TimeNs, channel, value);
+                break;
+            }
+
+            case TraceTag.ChannelDef:
+            {
+                var channel = (int)Varint.ReadUnsigned(_stream);
+                var kind = (ChannelKind)ReadByteChecked();
+                Span<byte> scaleBytes = stackalloc byte[8];
+                _stream.ReadExactly(scaleBytes);
+                var scale = BinaryPrimitives.ReadDoubleLittleEndian(scaleBytes);
+                var name = ReadString();
+                var unit = ReadString();
+                state.LastValue[channel] = 0;
+                evt = new ChannelDefEvent(state.TimeNs, channel, kind, scale, name, unit);
+                break;
+            }
+
+            case TraceTag.Mark:
+                evt = new MarkEvent(state.TimeNs, (MarkKind)ReadByteChecked(), ReadString());
+                break;
+
+            default:
+                throw new InvalidDataException($"Unknown core trace tag 0x{tagByte:x2}");
+        }
+
+        return true;
     }
 
     private byte ReadByteChecked()

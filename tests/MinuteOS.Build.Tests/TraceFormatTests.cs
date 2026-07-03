@@ -80,6 +80,27 @@ public class TraceFormatTests
     }
 
     [Fact]
+    public void Reader_StopsCleanlyOnATruncatedTrailingRecord()
+    {
+        using var full = new MemoryStream();
+        var writer = new TraceWriter(full, 0);
+        writer.WritePc(1_000, 0x20);
+        writer.WriteMeasurement(2_000, 0, 5); // whole record we will cut mid-way
+        writer.Flush();
+
+        // Simulate a recorder killed mid-write: drop the last byte so the
+        // trailing measurement record is incomplete.
+        var bytes = full.ToArray();
+        using var cut = new MemoryStream(bytes[..^1]);
+
+        var reader = new TraceReader(cut);
+        var events = reader.Events().ToList();
+
+        Assert.Equal(new PcSampleEvent(1_000, 0x20, false), Assert.Single(events));
+        Assert.True(reader.Truncated);
+    }
+
+    [Fact]
     public async Task Recorder_MergesSourcesOnOneMonotonicTimeline()
     {
         var path = Path.Combine(Path.GetTempPath(), $"minuteos-trace-{Guid.NewGuid():N}.mtrace");
