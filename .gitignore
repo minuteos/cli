@@ -4,3 +4,6 @@ out/
 *.user
 *.suo
 .vs/
+
+# libusb native binaries are fetched by CI (eng/fetch-libusb), not committed
+src/MinuteOS.Debug/native/*/libusb-1.0.*

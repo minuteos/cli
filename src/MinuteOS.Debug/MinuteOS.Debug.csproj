@@ -24,17 +24,31 @@
     <EmbeddedResource Include="Renode\Plugins\*.cs" />
   </ItemGroup>
 
-  <!-- Embedded native libusb (official distro build, per-RID) so single-file /
+  <!-- Embedded native libusb (official per-platform builds) so single-file /
        AOT builds carry it; extracted + loaded at runtime by
-       EmbeddedNativeLibrary. The Linux build still needs system libudev/libcap
-       at load time (present on any systemd host). Logical name:
-       MinuteOS.Debug.native.<rid>.<file>. One entry per platform binary. -->
+       EmbeddedNativeLibrary (logical name MinuteOS.Debug.native.<rid>.<file>).
+       The binaries are NOT committed - CI fetches each platform's official
+       libusb into native/<rid>/ before publish (see eng/fetch-libusb.sh and
+       .github/workflows/aot.yml), so a normal clone builds with none embedded
+       and the loader falls back to a system libusb. Each entry is conditional
+       so only what CI placed is embedded (a per-RID publish only needs its own).
+       WithCulture=false: the ".so" in the Linux name is otherwise misread as the
+       Somali culture code and routed to a satellite assembly. Linux still needs
+       system libudev/libcap at load time (present on any systemd host). -->
   <ItemGroup>
     <None Remove="native/**/*" />
-    <!-- WithCulture=false: the ".so" in the filename is otherwise misread as the
-         Somali culture code and routed to a satellite assembly. -->
-    <EmbeddedResource Include="native/linux-x64/libusb-1.0.so.0"
+    <EmbeddedResource Include="native/linux-x64/libusb-1.0.so.0" Condition="Exists('native/linux-x64/libusb-1.0.so.0')"
                       LogicalName="MinuteOS.Debug.native.linux-x64.libusb-1.0.so.0" WithCulture="false" />
+    <EmbeddedResource Include="native/linux-arm64/libusb-1.0.so.0" Condition="Exists('native/linux-arm64/libusb-1.0.so.0')"
+                      LogicalName="MinuteOS.Debug.native.linux-arm64.libusb-1.0.so.0" WithCulture="false" />
+    <EmbeddedResource Include="native/win-x64/libusb-1.0.dll" Condition="Exists('native/win-x64/libusb-1.0.dll')"
+                      LogicalName="MinuteOS.Debug.native.win-x64.libusb-1.0.dll" WithCulture="false" />
+    <EmbeddedResource Include="native/win-arm64/libusb-1.0.dll" Condition="Exists('native/win-arm64/libusb-1.0.dll')"
+                      LogicalName="MinuteOS.Debug.native.win-arm64.libusb-1.0.dll" WithCulture="false" />
+    <EmbeddedResource Include="native/osx-x64/libusb-1.0.dylib" Condition="Exists('native/osx-x64/libusb-1.0.dylib')"
+                      LogicalName="MinuteOS.Debug.native.osx-x64.libusb-1.0.dylib" WithCulture="false" />
+    <EmbeddedResource Include="native/osx-arm64/libusb-1.0.dylib" Condition="Exists('native/osx-arm64/libusb-1.0.dylib')"
+                      LogicalName="MinuteOS.Debug.native.osx-arm64.libusb-1.0.dylib" WithCulture="false" />
   </ItemGroup>
 
 </Project>

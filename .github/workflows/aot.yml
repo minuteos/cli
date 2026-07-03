@@ -1,0 +1,59 @@
+name: aot
+
+# Build the self-contained NativeAOT `minuteos` for every platform. Each job
+# runs on its target-arch runner, fetches that platform's official libusb
+# (eng/fetch-libusb.*), and publishes. The libusb binaries are not committed -
+# they are embedded into the assembly at publish time and extracted at runtime
+# (EmbeddedNativeLibrary); a build with none present falls back to system libusb.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  publish:
+    name: ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: linux-x64,   os: ubuntu-latest }
+          - { rid: linux-arm64, os: ubuntu-24.04-arm }
+          - { rid: osx-x64,     os: macos-13 }
+          - { rid: osx-arm64,   os: macos-14 }
+          - { rid: win-x64,     os: windows-latest }
+          - { rid: win-arm64,   os: windows-11-arm }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # NativeAOT prerequisites (mac/win runners already ship the toolchain).
+      - name: Install AOT toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends clang zlib1g-dev
+
+      - name: Fetch libusb (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          chmod +x eng/fetch-libusb.sh
+          eng/fetch-libusb.sh ${{ matrix.rid }}
+
+      - name: Fetch libusb (Windows)
+        if: runner.os == 'Windows'
+        run: pwsh eng/fetch-libusb.ps1 -Rid ${{ matrix.rid }}
+
+      - name: Publish NativeAOT
+        run: dotnet publish src/MinuteOS.Cli -r ${{ matrix.rid }} -c Release -p:PublishAot=true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minuteos-${{ matrix.rid }}
+          path: |
+            src/MinuteOS.Cli/bin/Release/net10.0/${{ matrix.rid }}/publish/minuteos
+            src/MinuteOS.Cli/bin/Release/net10.0/${{ matrix.rid }}/publish/minuteos.exe
+          if-no-files-found: error
