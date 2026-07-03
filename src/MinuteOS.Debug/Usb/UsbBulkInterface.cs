@@ -34,6 +34,11 @@ internal sealed class UsbBulkInterface : IDisposable
     public static UsbBulkInterface Claim(ushort vendorId, IReadOnlyList<ushort> productIds, string? serial,
         Func<UsbInterfaceInfo, bool> select, string description, ILogger logger)
     {
+        // Prefer the libusb we ship embedded (single-file / AOT builds), so USB
+        // access works with no system libusb install; no-ops (system libusb takes
+        // over) when there's no embedded copy for this platform.
+        EmbeddedNativeLibrary.Ensure("libusb-1.0", logger);
+
         var context = new UsbContext();
         try
         {

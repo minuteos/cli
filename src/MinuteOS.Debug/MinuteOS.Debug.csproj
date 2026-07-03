@@ -24,4 +24,15 @@
     <EmbeddedResource Include="Renode\Plugins\*.cs" />
   </ItemGroup>
 
+  <!-- Embedded native libusb (udev-free, per-RID) so single-file / AOT builds
+       carry it; extracted + loaded at runtime by EmbeddedNativeLibrary. Logical
+       name: MinuteOS.Debug.native.<rid>.<file>. One entry per platform binary. -->
+  <ItemGroup>
+    <None Remove="native/**/*" />
+    <!-- WithCulture=false: the ".so" in the filename is otherwise misread as the
+         Somali culture code and routed to a satellite assembly. -->
+    <EmbeddedResource Include="native/linux-x64/libusb-1.0.so.0"
+                      LogicalName="MinuteOS.Debug.native.linux-x64.libusb-1.0.so.0" WithCulture="false" />
+  </ItemGroup>
+
 </Project>
