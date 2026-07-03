@@ -1,8 +1,15 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 
 namespace MinuteOS.Debug.Svd;
+
+/// <summary>Source-gen JSON context for the SVD index cache (NativeAOT/trim compatible).</summary>
+[JsonSerializable(typeof(List<SvdCache.IndexItem>))]
+internal partial class SvdJsonContext : JsonSerializerContext
+{
+}
 
 /// <summary>
 /// SVD lookup by device model - the port of the extension's <c>svd.cache</c>:
@@ -24,7 +31,7 @@ public sealed class SvdCache(ILogger logger, HttpClient? http = null, string? ca
                 ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cache", "minuteos"),
             "svd");
 
-    private sealed record IndexItem(string Name, long Size, string Sha, string Url);
+    internal sealed record IndexItem(string Name, long Size, string Sha, string Url);
 
     /// <summary>Finds and parses the SVD for a model name (or a local .svd path).</summary>
     public async Task<SvdDevice?> GetAsync(string model, CancellationToken cancellationToken = default)
@@ -80,11 +87,12 @@ public sealed class SvdCache(ILogger logger, HttpClient? http = null, string? ca
         }
 
         Directory.CreateDirectory(_cacheDir);
-        await File.WriteAllTextAsync(indexPath, JsonSerializer.Serialize(items), cancellationToken);
+        await File.WriteAllTextAsync(indexPath,
+            JsonSerializer.Serialize(items, typeof(List<IndexItem>), SvdJsonContext.Default), cancellationToken);
         return items;
 
         static List<IndexItem> Load(string json)
-            => JsonSerializer.Deserialize<List<IndexItem>>(json) ?? [];
+            => (List<IndexItem>?)JsonSerializer.Deserialize(json, typeof(List<IndexItem>), SvdJsonContext.Default) ?? [];
     }
 
     private async Task<string> GetSvdXmlAsync(IndexItem item, CancellationToken cancellationToken)

@@ -68,3 +68,25 @@ services.AddMinuteosBuild()
   configuration's settings.
 - Custom steps run for the top-level build; nested `sub-build` graphs currently
   use the built-in catalog only.
+
+## Native AOT
+
+The CLI publishes as a self-contained **NativeAOT** binary — a single native
+executable with no .NET runtime dependency and fast cold start (useful for
+`minuteos dap`, which an editor spawns per debug session):
+
+```bash
+dotnet publish src/MinuteOS.Cli -r linux-x64 -c Release -p:PublishAot=true
+# -> bin/Release/net10.0/linux-x64/publish/minuteos  (~15 MB, self-contained)
+```
+
+This works because every layer is reflection-free: the command framework
+(`triaxis.CommandLine`) registers commands via a compile-time source generator,
+config loading uses YamlDotNet's **static** (de)serialization
+(`Vecc.YamlDotNet.Analyzers.StaticGenerator` + `YamlContext`; the `object`- and
+`Dictionary`-valued maps are handled by `SettingsMapConverter`/
+`StringMapConverter` without reflection), and the JSON that isn't already built
+on the `JsonNode` DOM goes through source-gen `JsonSerializerContext`s. AOT and
+`PackAsTool` are mutually exclusive, so a native publish suppresses the tool
+packaging automatically; the default `dotnet pack` still produces the global
+tool.

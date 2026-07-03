@@ -8,11 +8,18 @@
     <RootNamespace>MinuteOS.Cli</RootNamespace>
     <AssemblyName>minuteos</AssemblyName>
 
-    <PackAsTool>true</PackAsTool>
+    <!-- Ship as a dotnet global tool by default. A native AOT publish
+         (`dotnet publish -r <rid> -p:PublishAot=true`) produces a
+         self-contained native binary instead; the two are mutually exclusive,
+         so PackAsTool is suppressed for AOT. The command framework
+         (triaxis.CommandLine, source-gen) and config loading (YamlDotNet static
+         context) are both reflection-free, so AOT needs no per-command work. -->
+    <PackAsTool Condition="'$(PublishAot)' != 'true'">true</PackAsTool>
     <ToolCommandName>minuteos</ToolCommandName>
     <PackageId>minuteos</PackageId>
     <Version>0.1.0</Version>
     <Description>CLI for managing minuteos projects: build, test, and scaffold.</Description>
+    <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
   <ItemGroup>

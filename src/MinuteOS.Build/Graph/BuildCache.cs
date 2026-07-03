@@ -1,6 +1,14 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace MinuteOS.Build.Graph;
+
+/// <summary>Source-gen JSON context for the action cache (NativeAOT/trim compatible).</summary>
+[JsonSourceGenerationOptions(WriteIndented = true)]
+[JsonSerializable(typeof(Dictionary<string, BuildCache.Entry>))]
+internal partial class BuildCacheJsonContext : JsonSerializerContext
+{
+}
 
 /// <summary>
 /// Per-config action cache (docs/design/task-graph.md): an inspectable JSON file
@@ -39,7 +47,11 @@ public sealed class BuildCache
         Dictionary<string, Entry>? entries = null;
         if (File.Exists(path))
         {
-            try { entries = JsonSerializer.Deserialize<Dictionary<string, Entry>>(File.ReadAllText(path)); }
+            try
+            {
+                entries = (Dictionary<string, Entry>?)JsonSerializer.Deserialize(
+                    File.ReadAllText(path), typeof(Dictionary<string, Entry>), BuildCacheJsonContext.Default);
+            }
             catch { /* corrupt cache - rebuild from scratch */ }
         }
         return new BuildCache(path, entries ?? [], fingerprinter ?? new MtimeSizeFingerprinter());
@@ -111,7 +123,8 @@ public sealed class BuildCache
     public void Save()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-        File.WriteAllText(_path, JsonSerializer.Serialize(_entries, new JsonSerializerOptions { WriteIndented = true }));
+        File.WriteAllText(_path, JsonSerializer.Serialize(
+            _entries, typeof(Dictionary<string, Entry>), BuildCacheJsonContext.Default));
     }
 
     // A real filesystem path (not a "value:..." logical artifact).

@@ -14,6 +14,7 @@ namespace MinuteOS.Build;
 ///   TOOLCHAIN_PREFIX = arm-..  → settings: { gcc.toolchain-prefix: arm-none-eabi- }
 ///   ARCH_FLAGS = -mcpu=...     → settings: { gcc.arch-flags: [...] }
 /// </summary>
+[YamlSerializable]
 public class TargetMeta
 {
     public const string FileName = "target.yaml";
@@ -58,9 +59,10 @@ public class TargetMeta
     [YamlIgnore]
     public string Name { get; set; } = "";
 
-    private static readonly IDeserializer Deserializer = new DeserializerBuilder()
+    private static readonly IDeserializer Deserializer = new StaticDeserializerBuilder(new YamlContext())
         .WithNamingConvention(HyphenatedNamingConvention.Instance)
         .IgnoreUnmatchedProperties()
+        .WithTypeConverter(SettingsMapConverter.Instance)
         .Build();
 
     public static TargetMeta? TryLoad(string targetDir, string targetName)

@@ -9,6 +9,7 @@ namespace MinuteOS.Build;
 /// This is how components declare their dependencies, build contributions,
 /// and build steps - replacing the old Include.mk system.
 /// </summary>
+[YamlSerializable]
 public class ComponentMeta
 {
     public const string FileName = "component.yaml";
@@ -61,9 +62,10 @@ public class ComponentMeta
     [YamlIgnore]
     public string Name { get; set; } = "";
 
-    private static readonly IDeserializer Deserializer = new DeserializerBuilder()
+    private static readonly IDeserializer Deserializer = new StaticDeserializerBuilder(new YamlContext())
         .WithNamingConvention(HyphenatedNamingConvention.Instance)
         .IgnoreUnmatchedProperties()
+        .WithTypeConverter(SettingsMapConverter.Instance)
         .Build();
 
     public static ComponentMeta? TryLoad(string componentDir, string componentName)
@@ -87,6 +89,7 @@ public class ComponentMeta
 /// Reference to a build step from component.yaml.
 /// Can be a simple name or include configuration.
 /// </summary>
+[YamlSerializable]
 public class StepReference
 {
     /// <summary>

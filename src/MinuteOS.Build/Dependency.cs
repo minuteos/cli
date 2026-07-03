@@ -18,6 +18,7 @@ namespace MinuteOS.Build;
 ///     git: https://github.com/minuteos/lib-arm
 ///     ref: main
 /// </summary>
+[YamlDotNet.Serialization.YamlSerializable]
 public class Dependency
 {
     /// <summary>Dependency identity; also the default directory for path deps.</summary>

@@ -10,8 +10,9 @@ namespace MinuteOS.Build;
 /// </summary>
 internal static class MetaYaml
 {
-    public static readonly ISerializer Serializer = new SerializerBuilder()
+    public static readonly ISerializer Serializer = new StaticSerializerBuilder(new YamlContext())
         .WithNamingConvention(HyphenatedNamingConvention.Instance)
+        .WithTypeConverter(SettingsMapConverter.Instance)
         .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
         // Quote scalars that would otherwise be read back as null/bool/number,
         // e.g. qemu's `-monitor null` arg must stay the string "null".

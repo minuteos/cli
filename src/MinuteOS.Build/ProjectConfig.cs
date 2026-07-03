@@ -7,6 +7,7 @@ namespace MinuteOS.Build;
 /// YAML project configuration model.
 /// Loaded from minuteos.yaml in the project root.
 /// </summary>
+[YamlSerializable]
 public class ProjectConfig
 {
     public const string FileName = "minuteos.yaml";
@@ -56,8 +57,9 @@ public class ProjectConfig
                 $"No {FileName} found in {projectRoot}. Run 'minuteos init' to create one.");
 
         var yaml = File.ReadAllText(path);
-        var deserializer = new DeserializerBuilder()
+        var deserializer = new StaticDeserializerBuilder(new YamlContext())
             .WithNamingConvention(HyphenatedNamingConvention.Instance)
+            .WithTypeConverter(SettingsMapConverter.Instance)
             .Build();
 
         var config = deserializer.Deserialize<ProjectConfig>(yaml)
@@ -91,6 +93,7 @@ public class ProjectConfig
 /// toolchain configuration (flat <c>defines</c>/<c>include-dirs</c>, namespaced
 /// <c>gcc.*</c>).
 /// </summary>
+[YamlSerializable]
 public class ConfigurationProfile
 {
     public string? Target { get; set; }

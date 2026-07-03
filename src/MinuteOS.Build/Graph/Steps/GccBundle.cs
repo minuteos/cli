@@ -151,18 +151,23 @@ public sealed class GccCompileStep : IGraphStep
         var compdbPath = Path.Combine(config.OutputRoot, "compile_commands.json");
         yield return new BuildAction("compile-commands", [], [Artifact.File(compdbPath, ("kind", "compdb"))], actx =>
         {
-            var json = System.Text.Json.JsonSerializer.Serialize(
-                compdb.Select(e => new
+            // Built via the JSON DOM (AOT-safe: no reflection-serialized types).
+            var entries = new System.Text.Json.Nodes.JsonArray();
+            foreach (var e in compdb)
+            {
+                entries.Add(new System.Text.Json.Nodes.JsonObject
                 {
-                    directory = projectRoot,
-                    arguments = (string[])[e.Program, .. e.Args],
-                    file = e.File,
-                }),
-                new System.Text.Json.JsonSerializerOptions
-                {
-                    WriteIndented = true,
-                    Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+                    ["directory"] = projectRoot,
+                    ["arguments"] = new System.Text.Json.Nodes.JsonArray(
+                        ((string[])[e.Program, .. e.Args]).Select(a => (System.Text.Json.Nodes.JsonNode)a).ToArray()),
+                    ["file"] = e.File,
                 });
+            }
+            var json = entries.ToJsonString(new System.Text.Json.JsonSerializerOptions
+            {
+                WriteIndented = true,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            });
 
             if (!File.Exists(compdbPath) || File.ReadAllText(compdbPath) != json)
                 File.WriteAllText(compdbPath, json);
