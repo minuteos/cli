@@ -1,10 +1,8 @@
-using System.Globalization;
 using System.IO.Pipelines;
-using System.Text.Json.Nodes;
 using LibUsbDotNet;
 using LibUsbDotNet.LibUsb;
-using LibUsbDotNet.Main;
 using Microsoft.Extensions.Logging;
+using MinuteOS.Debug.Usb;
 
 namespace MinuteOS.Debug.Swo;
 
@@ -18,88 +16,37 @@ namespace MinuteOS.Debug.Swo;
 /// </summary>
 public sealed class UsbTraceStream : IAsyncDisposable
 {
-    private readonly UsbContext _context;
-    private readonly IUsbDevice _device;
-    private readonly int _interfaceNumber;
+    private readonly UsbBulkInterface _usb;
     private readonly CancellationTokenSource _cts = new();
     private readonly Pipe _pipe = new();
     private readonly Task _pump;
 
     public Stream Stream => _pipe.Reader.AsStream();
 
-    private UsbTraceStream(UsbContext context, IUsbDevice device, int interfaceNumber,
-        UsbEndpointReader reader, ILogger logger)
+    private UsbTraceStream(UsbBulkInterface usb, UsbEndpointReader reader, ILogger logger)
     {
-        _context = context;
-        _device = device;
-        _interfaceNumber = interfaceNumber;
+        _usb = usb;
         _pump = Task.Run(() => PumpAsync(reader, logger));
     }
 
     /// <summary>
-    /// Opens the first bulk IN endpoint of the interface whose name contains
-    /// <paramref name="interfaceName"/> on the USB device matching
+    /// Opens the bulk IN endpoint of the interface whose name contains
+    /// <paramref name="interfaceName"/> on the device matching
     /// <paramref name="vendorId"/>/<paramref name="productId"/>.
     /// </summary>
     public static UsbTraceStream Open(ushort vendorId, ushort productId, string interfaceName, ILogger logger)
     {
-        var context = new UsbContext();
+        var usb = UsbBulkInterface.Claim(vendorId, [productId], serial: null,
+            i => i.Interface?.Contains(interfaceName, StringComparison.OrdinalIgnoreCase) == true && UsbBulkInterface.HasBulkIn(i),
+            $"SWO trace interface '{interfaceName}'", logger);
         try
         {
-            var device = context.Find(d => d.VendorId == vendorId && d.ProductId == productId)
-                ?? throw new InvalidOperationException(
-                    $"No USB device {vendorId:x4}:{productId:x4} found - is the probe connected?");
-            device.Open();
-
-            foreach (var cfg in device.Configs)
-            {
-                foreach (var iface in cfg.Interfaces)
-                {
-                    var name = iface.Interface;
-                    if (string.IsNullOrEmpty(name) || !name.Contains(interfaceName, StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    var ep = iface.Endpoints.FirstOrDefault(e =>
-                        (e.EndpointAddress & 0x80) != 0 && (e.Attributes & 0x3) == (byte)EndpointType.Bulk);
-                    if (ep == null)
-                        continue;
-
-                    logger.LogInformation("SWO from USB {Vid:x4}:{Pid:x4}, interface '{Name}', endpoint 0x{Ep:x2}",
-                        vendorId, productId, name, ep.EndpointAddress);
-                    device.SetConfiguration(cfg.ConfigurationValue);
-                    device.ClaimInterface(iface.Number);
-                    device.SetAltInterface(iface.AlternateSetting);
-                    var reader = device.OpenEndpointReader((ReadEndpointID)ep.EndpointAddress, 4096, EndpointType.Bulk);
-                    return new UsbTraceStream(context, device, iface.Number, reader, logger);
-                }
-            }
-
-            throw new InvalidOperationException(
-                $"USB device {vendorId:x4}:{productId:x4} has no '{interfaceName}' interface with a bulk IN endpoint");
+            return new UsbTraceStream(usb, usb.OpenReader(4096), logger);
         }
         catch
         {
-            context.Dispose();
+            usb.Dispose();
             throw;
-        }
-    }
-
-    /// <summary>Parses a `vid`/`pid` config value: a JSON number or a hex/decimal string.</summary>
-    public static ushort? ParseId(JsonNode? node)
-    {
-        if (node is null)
-            return null;
-        try
-        {
-            return (ushort)node.GetValue<int>();
-        }
-        catch
-        {
-            var text = node.ToString().Trim();
-            var hex = text.StartsWith("0x", StringComparison.OrdinalIgnoreCase);
-            return ushort.TryParse(hex ? text[2..] : text,
-                hex ? NumberStyles.HexNumber : NumberStyles.Integer, CultureInfo.InvariantCulture, out var v)
-                ? v : null;
         }
     }
 
@@ -138,9 +85,7 @@ public sealed class UsbTraceStream : IAsyncDisposable
     {
         await _cts.CancelAsync();
         try { await _pump; } catch { /* best effort */ }
-        try { _device.ReleaseInterface(_interfaceNumber); } catch { /* may already be gone */ }
-        _device.Dispose();
-        _context.Dispose();
+        _usb.Dispose();
         _cts.Dispose();
     }
 }

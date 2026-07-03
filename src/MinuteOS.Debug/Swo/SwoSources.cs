@@ -83,8 +83,8 @@ public sealed class BmpSwo(JsonObject config, ILogger logger) : ISwoSource
             return Task.CompletedTask;
         }
 
-        var vendorId = UsbTraceStream.ParseId(config["vid"]) ?? DefaultVendorId;
-        var productId = UsbTraceStream.ParseId(config["pid"]) ?? DefaultProductId;
+        var vendorId = Usb.UsbIds.Parse(config["vid"]) ?? DefaultVendorId;
+        var productId = Usb.UsbIds.Parse(config["pid"]) ?? DefaultProductId;
         var interfaceName = config["interface"]?.GetValue<string>() ?? DefaultInterface;
         try
         {

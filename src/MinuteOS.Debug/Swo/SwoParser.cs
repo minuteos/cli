@@ -3,6 +3,39 @@ namespace MinuteOS.Debug.Swo;
 /// <summary>An ITM/DWT source packet decoded from the SWO stream.</summary>
 public sealed record SwoPacket(bool Dwt, int Channel, byte[] Data);
 
+/// <summary>What a decoded SWO packet means to the profiler/recorder/timeline.</summary>
+public enum SwoSampleKind
+{
+    /// <summary>Not a PC sample or log (e.g. other DWT source) - ignore.</summary>
+    Ignore,
+    PcSample,
+    PcSleep,
+    Log,
+}
+
+/// <summary>A classified SWO packet: the shared interpretation of PC samples and ITM logs.</summary>
+public readonly record struct SwoSample(SwoSampleKind Kind, uint Pc, int Port, byte[] Data)
+{
+    /// <summary>
+    /// Classifies a packet the way every consumer needs: DWT PC-sample source
+    /// packets become PC samples (or the sleep form), ITM stimulus-port writes
+    /// become logs, anything else is ignored. Keeps the DWT discriminator and
+    /// Thumb-bit handling in one place.
+    /// </summary>
+    public static SwoSample Classify(SwoPacket packet)
+    {
+        if (!packet.Dwt)
+            return new SwoSample(SwoSampleKind.Log, 0, packet.Channel, packet.Data);
+        if (packet.Channel != SwoProfiler.PcSampleDiscriminator)
+            return new SwoSample(SwoSampleKind.Ignore, 0, 0, []);
+        if (packet.Data.Length == 1 && packet.Data[0] == 0)
+            return new SwoSample(SwoSampleKind.PcSleep, 0, 0, []);
+        if (packet.Data.Length == 4)
+            return new SwoSample(SwoSampleKind.PcSample, BitConverter.ToUInt32(packet.Data) & ~1u, 0, []);
+        return new SwoSample(SwoSampleKind.Ignore, 0, 0, []);
+    }
+}
+
 /// <summary>
 /// Incremental SWO/SWV (ITM trace) stream decoder - the port of the
 /// extension's reader loop in <c>gdb/swo.ts</c>, restructured as a push-based

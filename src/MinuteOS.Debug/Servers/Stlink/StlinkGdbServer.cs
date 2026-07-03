@@ -1,7 +1,6 @@
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using MinuteOS.Debug.Mi;
-using MinuteOS.Debug.Swo;
 
 namespace MinuteOS.Debug.Servers.Stlink;
 
@@ -31,8 +30,8 @@ public sealed class StlinkGdbServer : InternalGdbServer, IGdbServer
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
         var serial = _config["port"]?.GetValue<string>() ?? _config["serial"]?.GetValue<string>();
-        var vendorId = UsbTraceStream.ParseId(_config["vid"]) ?? StlinkUsb.VendorId;
-        var productIds = UsbTraceStream.ParseId(_config["pid"]) is { } pid ? [pid] : StlinkUsb.ProductIds;
+        var vendorId = Usb.UsbIds.Parse(_config["vid"]) ?? StlinkUsb.VendorId;
+        var productIds = Usb.UsbIds.Parse(_config["pid"]) is { } pid ? [pid] : StlinkUsb.ProductIds;
 
         var usb = StlinkUsb.Open(vendorId, productIds, serial, Logger);
         _dap = new StlinkDap(usb, Logger);

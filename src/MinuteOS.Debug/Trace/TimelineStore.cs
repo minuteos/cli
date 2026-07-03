@@ -107,18 +107,18 @@ public sealed class TimelineStore(long retentionNs = 300_000_000_000L)
     /// <summary>Feeds a live SWO packet (same decode as the recorder): DWT PC samples and ITM logs.</summary>
     public void OnSwoPacket(long timeNs, Swo.SwoPacket packet)
     {
-        if (packet.Dwt)
+        var sample = Swo.SwoSample.Classify(packet);
+        switch (sample.Kind)
         {
-            if (packet.Channel != Swo.SwoProfiler.PcSampleDiscriminator)
-                return;
-            if (packet.Data.Length == 1 && packet.Data[0] == 0)
+            case Swo.SwoSampleKind.PcSample:
+                AddPc(timeNs, sample.Pc, sleep: false);
+                break;
+            case Swo.SwoSampleKind.PcSleep:
                 AddPc(timeNs, 0, sleep: true);
-            else if (packet.Data.Length == 4)
-                AddPc(timeNs, BitConverter.ToUInt32(packet.Data) & ~1u, sleep: false);
-        }
-        else
-        {
-            AddLog(timeNs, packet.Channel, System.Text.Encoding.UTF8.GetString(packet.Data));
+                break;
+            case Swo.SwoSampleKind.Log:
+                AddLog(timeNs, sample.Port, System.Text.Encoding.UTF8.GetString(sample.Data));
+                break;
         }
     }
 

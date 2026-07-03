@@ -77,18 +77,18 @@ public sealed class TraceRecorder : IAsyncDisposable
     /// </summary>
     public void OnSwoPacket(Swo.SwoPacket packet)
     {
-        if (packet.Dwt)
+        var sample = Swo.SwoSample.Classify(packet);
+        switch (sample.Kind)
         {
-            if (packet.Channel != Swo.SwoProfiler.PcSampleDiscriminator)
-                return;
-            if (packet.Data.Length == 1 && packet.Data[0] == 0)
+            case Swo.SwoSampleKind.PcSample:
+                RecordPc(sample.Pc);
+                break;
+            case Swo.SwoSampleKind.PcSleep:
                 RecordPcSleep();
-            else if (packet.Data.Length == 4)
-                RecordPc(BitConverter.ToUInt32(packet.Data) & ~1u); // clear the Thumb bit
-        }
-        else
-        {
-            RecordLog(packet.Channel, packet.Data);
+                break;
+            case Swo.SwoSampleKind.Log:
+                RecordLog(sample.Port, sample.Data);
+                break;
         }
     }
 
