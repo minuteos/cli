@@ -36,6 +36,9 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
     private readonly Swo.SwoProfiler _profiler = new();
     private Lazy<ElfSymbols>? _symbols;
     private DisassemblyCache? _disassemblyCache;
+    private Trace.TraceRecorder? _recorder;
+    private Trace.ISmuSampleSource? _traceSmu;
+    private string? _cwd;
 
     private readonly Dictionary<int, JsonObject> _frameIdMap = [];
     private readonly Dictionary<object, GdbVar> _varMap = [];
@@ -92,6 +95,8 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
                 "disassemble" => await DisassembleAsync(args, cancellationToken),
                 "minuteos.profile.start" => await ProfileStartAsync(cancellationToken),
                 "minuteos.profile.stop" => await ProfileStopAsync(args, cancellationToken),
+                "minuteos.trace.start" => await TraceStartAsync(args, cancellationToken),
+                "minuteos.trace.stop" => await TraceStopAsync(cancellationToken),
                 _ => throw new NotSupportedException($"Unsupported request '{command}'"),
             };
             await connection.SendResponseAsync(request, success: true, body, cancellationToken: cancellationToken);
@@ -136,6 +141,7 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
         _stopAtConnect = config["stopAtConnect"]?.GetValue<bool>() ?? false;
 
         var cwd = config["cwd"]?.GetValue<string>();
+        _cwd = cwd;
         var program = config["program"]?.GetValue<string>()
             ?? throw new InvalidOperationException("Launch configuration has no 'program'");
         var programPath = Path.GetFullPath(program, cwd != null ? Path.GetFullPath(cwd) : Environment.CurrentDirectory);
@@ -243,6 +249,7 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
             if (!packet.Dwt && packet.Channel == 0)
                 _ = SendOutputAsync("stdout", System.Text.Encoding.UTF8.GetString(packet.Data));
             _profiler.OnPacket(packet);
+            _recorder?.OnSwoPacket(packet);
         }, logger);
         await _swoSession.StartAsync(cancellationToken);
     }
@@ -297,6 +304,61 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
             args["top"] is { } top ? MiClient.ParseNumber(top) : 50);
         await SendOutputAsync("console", Swo.SwoProfiler.FormatReport(report));
         return report;
+    }
+
+    // #endregion
+
+    // #region Timeline recording (minuteos.trace.* custom requests)
+
+    /// <summary>
+    /// Starts a unified timeline recording (mtrace): ITM logs and DWT PC samples
+    /// from the SWO stream, plus SMU measurements once V3PWR streaming lands, on
+    /// one host clock. PC events require PC sampling to be enabled (via profiling
+    /// or <c>swo.profile</c>); logs and SMU samples are always captured.
+    /// </summary>
+    private async Task<JsonObject> TraceStartAsync(JsonObject args, CancellationToken cancellationToken)
+    {
+        if (_recorder != null)
+            throw new InvalidOperationException("A trace recording is already in progress");
+
+        var path = Path.GetFullPath(args["path"]?.GetValue<string>()
+            ?? Path.Combine(_cwd ?? Environment.CurrentDirectory, "trace.mtrace"));
+
+        var recorder = new Trace.TraceRecorder(path);
+        // The seam for real V3PWR streaming acquisition; a no-op until then, so
+        // no power track is recorded yet.
+        var smu = new Trace.NullSmuSampleSource();
+        recorder.Attach(smu);
+        await smu.StartAsync(cancellationToken);
+
+        _traceSmu = smu;
+        _recorder = recorder;
+        await SendOutputAsync("console", $"Recording timeline to {path}\n");
+        return new JsonObject { ["path"] = path };
+    }
+
+    /// <summary>Stops the recording and finalizes the file.</summary>
+    private async Task<JsonObject> TraceStopAsync(CancellationToken cancellationToken)
+    {
+        if (_recorder is not { } recorder)
+            return new JsonObject { ["recording"] = false };
+        _recorder = null;
+
+        var path = recorder.Path;
+        var events = recorder.EventCount;
+        await StopTraceSmuAsync(cancellationToken);
+        await recorder.DisposeAsync();
+        await SendOutputAsync("console", $"Timeline written: {path} ({events} events)\n");
+        return new JsonObject { ["path"] = path, ["events"] = events };
+    }
+
+    private async Task StopTraceSmuAsync(CancellationToken cancellationToken)
+    {
+        if (_traceSmu is not { } smu)
+            return;
+        _traceSmu = null;
+        await smu.StopAsync(cancellationToken);
+        await smu.DisposeAsync();
     }
 
     // #endregion
@@ -382,6 +444,12 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
 
     private async Task CleanupAsync()
     {
+        if (_recorder is { } recorder)
+        {
+            _recorder = null;
+            await StopTraceSmuAsync(CancellationToken.None);
+            await recorder.DisposeAsync();
+        }
         if (_swoSession is { } swoSession)
         {
             _swoSession = null;

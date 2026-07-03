@@ -12,7 +12,7 @@ namespace MinuteOS.Debug.Swo;
 public sealed class SwoProfiler
 {
     /// <summary>The DWT hardware-source discriminator for PC samples.</summary>
-    private const int PcSampleDiscriminator = 2;
+    public const int PcSampleDiscriminator = 2;
 
     private readonly object _sync = new();
     private readonly Dictionary<uint, long> _hits = [];

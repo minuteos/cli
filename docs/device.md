@@ -206,7 +206,9 @@ debug-adapter executable gets the whole debug engine:
   (launch `"profile": true`) to sample from launch. On real silicon the
   samples come from the DWT's cycle-tap sampler; under renode the
   ITM-capture overlay provides an emit register (`0xE0000F00`) so emulated
-  firmware can feed the same pipeline.
+  firmware can feed the same pipeline. PC samples, ITM logs and SMU
+  measurements can also be recorded together onto one timeline - see
+  [the unified `mtrace` format](trace.md) and `minuteos.trace.start`/`.stop`.
 - **renode `display`** — `{ "peripheral": "sysbus.lcd" }` overlays a
   framebuffer tap; the adapter relays the frame stream on a local port
   announced via the `minuteos.display` custom event.
