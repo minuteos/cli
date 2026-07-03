@@ -74,6 +74,11 @@ minuteos power on          # volt vout 3300m; pwr vout on
 minuteos power off [-c cfg] [--voltage 3.3] [--output vout] [--port ...]
 ```
 
+A debug session brackets target power itself: `minuteos dap` turns the output
+on before connecting when `smu.start-power-on` is set, and off on teardown when
+`smu.stop-power-off` is set — the same driver as `minuteos power`, no separate
+command needed.
+
 The driver speaks the V3PWR's line protocol (`power_monitor`,
 `format bin_hexa`, `volt <out> <mV>m`, `pwr <out> on|off`, `ack` responses) over
 a raw tty — a direct port of the extension's driver.
@@ -186,8 +191,10 @@ debug-adapter executable gets the whole debug engine:
   `[{ model, peripherals }]` layers. Peripherals appear as a DAP scope:
   peripheral → registers → decoded bitfields.
 - **`swo`** — `"renode"` (an ITM-capture peripheral is overlaid onto the
-  machine; no platform changes needed) or `{ "type": "bmp", "port": ... }`.
-  Stimulus port 0 is forwarded as `output` events.
+  machine; no platform changes needed) or `"bmp"` (the probe's USB trace
+  interface is claimed directly via libusb; pass `{ "type": "bmp", "port": ... }`
+  to read a device path instead). Stimulus port 0 is forwarded as `output`
+  events.
 - **Profiling** — with SWO active, the adapter collects DWT **PC samples**
   and symbolicates them against the program's ELF symbol table (sorted
   function ranges, one binary search per *unique* PC — the hot path is a

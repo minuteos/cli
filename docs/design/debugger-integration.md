@@ -1,8 +1,9 @@
 # Integrating the tool with minute-debug (no duplicated code)
 
-Status: **phases 1 and 3 are implemented in this repo** — the full debug
-engine is ported; what remains is the extension-side swap to
-`DebugAdapterExecutable` in [minuteos/vs-debugger].
+Status: **complete** — the full debug engine is ported (phases 1 and 3), the
+extension is swapped to `DebugAdapterExecutable` in [minuteos/vs-debugger] and
+reduced to a frontend, and the two engine-side gaps (BMP SWO USB claim,
+in-session SMU power) are closed.
 
 ## The problem
 
@@ -145,9 +146,11 @@ UI + descriptor. From then on there is exactly one device/debug codebase.
   that configures trace and drains the stream (`SwoSession`), and the sources:
   **renode** (ITM capture + ROM table overlaid onto the user's platform, the
   byte stream received over a loopback socket) and **BMP** (`swo enable` /
-  `traceswo enable` probed via `monitor help`; the stream is read from a
-  device path — automatic USB interface claim needs a USB stack and stays
-  extension-side for now). Stimulus port 0 becomes DAP `output` events.
+  `traceswo enable` probed via `monitor help`; the trace stream is claimed
+  straight off the probe's USB bulk interface via libusb — the port of the
+  extension's `services/usb.ts`, so SWO works on the same platforms, Windows
+  included — with an explicit `port` device path as an override). Stimulus port
+  0 becomes DAP `output` events.
 - `Swo/SwoProfiler` + `ElfSymbols` — PC-sampling profiler (beyond the
   original extension): DWT PC-sample packets are counted per unique address
   (O(1) per sample) and symbolicated once per unique PC against the ELF
@@ -199,14 +202,13 @@ boundary there, so each of those direct calls needs a DAP-shaped path:
 | config expansion + presets | resolved inside the adapter (`{config: name}` → build system), so the frontend needs no logic at all |
 
 Nothing in the session actually *requires* being in-process — the inline
-implementation was a convenience. The remaining step is entirely
-extension-side: swap the descriptor factory
-(`DebugAdapterInlineImplementation` → `DebugAdapterExecutable('minuteos',
-['dap'])`), render the `minuteos.display` stream in the webview, and delete
-the ported TS. One engine-side gap remains: BMP SWO capture reads from a
-device path rather than claiming the USB trace interface itself (that needs a
-user-space USB stack; the extension keeps doing it in-process until then, or
-the path can be provided by udev).
+implementation was a convenience. The extension-side finalization is done: the
+descriptor factory spawns `DebugAdapterExecutable('minuteos', ['dap'])`, the
+`minuteos.display` stream renders in a thin webview client, and the ported TS
+engine is deleted. The two engine-side gaps are closed too — BMP SWO now claims
+the probe's USB trace interface directly via libusb (with a device-path
+override), and `minuteos dap` brackets the session with SMU power on/off when
+`startPowerOn`/`stopPowerOff` are set.
 
 ## Why not the inverse (extension as the engine, CLI delegates)?
 
