@@ -48,18 +48,25 @@ public class TraceExportCommand : LoggingCommand
         await using var input = System.IO.File.OpenRead(File);
         var reader = new TraceReader(input);
 
-        TextWriter output = Output != null ? new StreamWriter(Output) : Console.Out;
-        try
+        if (format == "jsonl")
         {
-            if (format == "jsonl")
+            TextWriter output = Output != null ? new StreamWriter(Output) : Console.Out;
+            try
+            {
                 await WriteJsonlAsync(output, reader, symbolizer, cancellationToken);
-            else
-                await output.WriteLineAsync(PerfettoExport.ToJson(reader.Events(), symbolizer).ToJsonString());
+            }
+            finally
+            {
+                if (Output != null)
+                    await output.DisposeAsync();
+            }
         }
-        finally
+        else
         {
-            if (Output != null)
-                await output.DisposeAsync();
+            await using Stream output = Output != null
+                ? System.IO.File.Create(Output)
+                : Console.OpenStandardOutput();
+            await PerfettoExport.WriteAsync(output, reader.Events(), symbolizer, cancellationToken);
         }
         return 0;
     }

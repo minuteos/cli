@@ -1,5 +1,5 @@
 using System.Text;
-using System.Text.Json.Nodes;
+using System.Text.Json;
 
 namespace MinuteOS.Debug.Trace;
 
@@ -9,27 +9,39 @@ namespace MinuteOS.Debug.Trace;
 /// power channels become counter tracks, logs and marks become instant events,
 /// and PC samples become sample events with a symbolicated stack-frame table.
 /// Timestamps are microseconds (the format's unit).
+///
+/// The events are streamed straight to the output through a
+/// <see cref="Utf8JsonWriter"/>: only the channel table and the
+/// distinct-function frame table stay resident, so a multi-gigabyte recording
+/// exports in bounded memory. <c>stackFrames</c> is emitted after
+/// <c>traceEvents</c> - JSON object member order is irrelevant to the reader.
 /// </summary>
 public static class PerfettoExport
 {
     private const int Pid = 1;
     private const int LogTid = 2;
     private const int SampleTid = 3;
+    private const int FlushEvery = 4096;
 
-    public static JsonObject ToJson(IEnumerable<TraceEvent> events, Symbolizer? symbolizer)
+    public static async Task WriteAsync(Stream output, IEnumerable<TraceEvent> events, Symbolizer? symbolizer,
+        CancellationToken cancellationToken = default)
     {
-        var traceEvents = new JsonArray
-        {
-            Metadata("process_name", Pid, 0, "minuteos"),
-            Metadata("thread_name", Pid, LogTid, "logs"),
-            Metadata("thread_name", Pid, SampleTid, "pc samples"),
-        };
-        var stackFrames = new JsonObject();
+        await using var writer = new Utf8JsonWriter(output);
         var frameIds = new Dictionary<string, int>();
         var channels = new Dictionary<int, ChannelDefEvent>();
 
+        writer.WriteStartObject();
+        writer.WriteString("displayTimeUnit", "ns");
+        writer.WriteStartArray("traceEvents");
+
+        Metadata(writer, "process_name", 0, "minuteos");
+        Metadata(writer, "thread_name", LogTid, "logs");
+        Metadata(writer, "thread_name", SampleTid, "pc samples");
+
+        var n = 0;
         foreach (var e in events)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var ts = e.TimeNs / 1000.0;
             switch (e)
             {
@@ -39,80 +51,96 @@ public static class PerfettoExport
 
                 case MeasurementEvent m:
                     channels.TryGetValue(m.Channel, out var channel);
-                    traceEvents.Add(new JsonObject
-                    {
-                        ["ph"] = "C",
-                        ["name"] = channel?.Name ?? $"ch{m.Channel}",
-                        ["ts"] = ts,
-                        ["pid"] = Pid,
-                        ["args"] = new JsonObject { [channel?.Unit ?? "value"] = m.Raw * (channel?.Scale ?? 1) },
-                    });
+                    writer.WriteStartObject();
+                    writer.WriteString("ph", "C");
+                    writer.WriteString("name", channel?.Name ?? $"ch{m.Channel}");
+                    writer.WriteNumber("ts", ts);
+                    writer.WriteNumber("pid", Pid);
+                    writer.WriteStartObject("args");
+                    writer.WriteNumber(channel?.Unit ?? "value", m.Raw * (channel?.Scale ?? 1));
+                    writer.WriteEndObject();
+                    writer.WriteEndObject();
                     break;
 
                 case LogEvent log:
                     var text = Encoding.UTF8.GetString(log.Data);
-                    traceEvents.Add(Instant(FirstLine(text), ts, LogTid, "log",
-                        new JsonObject { ["text"] = text, ["port"] = log.Port }));
+                    Instant(writer, FirstLine(text), ts, LogTid, "log", w =>
+                    {
+                        w.WriteString("text", text);
+                        w.WriteNumber("port", log.Port);
+                    });
                     break;
 
                 case MarkEvent mark:
-                    traceEvents.Add(Instant(mark.Kind.ToString(), ts, LogTid, "mark",
-                        mark.Text.Length > 0 ? new JsonObject { ["text"] = mark.Text } : null));
+                    Instant(writer, mark.Kind.ToString(), ts, LogTid, "mark",
+                        mark.Text.Length > 0 ? w => w.WriteString("text", mark.Text) : null);
                     break;
 
                 case PcSampleEvent pc:
                     var label = pc.Sleep ? "sleep" : symbolizer?.Function(pc.Pc)?.Name ?? $"0x{pc.Pc:x8}";
                     if (!frameIds.TryGetValue(label, out var frame))
-                    {
-                        frame = frameIds.Count + 1;
-                        frameIds[label] = frame;
-                        stackFrames[frame.ToString()] = new JsonObject { ["name"] = label };
-                    }
-                    traceEvents.Add(new JsonObject
-                    {
-                        ["ph"] = "P",
-                        ["name"] = "pc",
-                        ["ts"] = ts,
-                        ["pid"] = Pid,
-                        ["tid"] = SampleTid,
-                        ["sf"] = frame,
-                    });
+                        frameIds[label] = frame = frameIds.Count + 1;
+                    writer.WriteStartObject();
+                    writer.WriteString("ph", "P");
+                    writer.WriteString("name", "pc");
+                    writer.WriteNumber("ts", ts);
+                    writer.WriteNumber("pid", Pid);
+                    writer.WriteNumber("tid", SampleTid);
+                    writer.WriteNumber("sf", frame);
+                    writer.WriteEndObject();
                     break;
             }
+
+            if (++n % FlushEvery == 0)
+                await writer.FlushAsync(cancellationToken);
         }
 
-        return new JsonObject
+        writer.WriteEndArray();
+
+        writer.WriteStartObject("stackFrames");
+        foreach (var (label, id) in frameIds)
         {
-            ["displayTimeUnit"] = "ns",
-            ["traceEvents"] = traceEvents,
-            ["stackFrames"] = stackFrames,
-        };
+            writer.WriteStartObject(id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            writer.WriteString("name", label);
+            writer.WriteEndObject();
+        }
+        writer.WriteEndObject();
+
+        writer.WriteEndObject();
+        await writer.FlushAsync(cancellationToken);
     }
 
-    private static JsonObject Metadata(string name, int pid, int tid, string value) => new()
+    private static void Metadata(Utf8JsonWriter writer, string name, int tid, string value)
     {
-        ["ph"] = "M",
-        ["name"] = name,
-        ["pid"] = pid,
-        ["tid"] = tid,
-        ["args"] = new JsonObject { ["name"] = value },
-    };
+        writer.WriteStartObject();
+        writer.WriteString("ph", "M");
+        writer.WriteString("name", name);
+        writer.WriteNumber("pid", Pid);
+        writer.WriteNumber("tid", tid);
+        writer.WriteStartObject("args");
+        writer.WriteString("name", value);
+        writer.WriteEndObject();
+        writer.WriteEndObject();
+    }
 
-    private static JsonObject Instant(string name, double ts, int tid, string category, JsonObject? args)
+    private static void Instant(Utf8JsonWriter writer, string name, double ts, int tid, string category,
+        Action<Utf8JsonWriter>? args)
     {
-        var obj = new JsonObject
-        {
-            ["ph"] = "i",
-            ["name"] = name,
-            ["ts"] = ts,
-            ["pid"] = Pid,
-            ["tid"] = tid,
-            ["s"] = "p", // process scope
-            ["cat"] = category,
-        };
+        writer.WriteStartObject();
+        writer.WriteString("ph", "i");
+        writer.WriteString("name", name);
+        writer.WriteNumber("ts", ts);
+        writer.WriteNumber("pid", Pid);
+        writer.WriteNumber("tid", tid);
+        writer.WriteString("s", "p"); // process scope
+        writer.WriteString("cat", category);
         if (args != null)
-            obj["args"] = args;
-        return obj;
+        {
+            writer.WriteStartObject("args");
+            args(writer);
+            writer.WriteEndObject();
+        }
+        writer.WriteEndObject();
     }
 
     private static string FirstLine(string text)

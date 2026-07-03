@@ -10,7 +10,7 @@ namespace MinuteOS.Debug.Tests;
 public class PerfettoExportTests
 {
     [Fact]
-    public void ToJson_MapsEachSourceToTheRightEventShape()
+    public async Task WriteAsync_MapsEachSourceToTheRightEventShape()
     {
         TraceEvent[] events =
         [
@@ -21,7 +21,9 @@ public class PerfettoExportTests
             new PcSampleEvent(4_000, 0, true),
         ];
 
-        var json = PerfettoExport.ToJson(events, symbolizer: null);
+        using var stream = new MemoryStream();
+        await PerfettoExport.WriteAsync(stream, events, symbolizer: null);
+        var json = JsonNode.Parse(stream.ToArray())!;
         Assert.Equal("ns", (string?)json["displayTimeUnit"]);
 
         var traceEvents = Assert.IsType<JsonArray>(json["traceEvents"]);
