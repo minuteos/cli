@@ -76,6 +76,12 @@ public static class MinuteDebugConfig
                 if (s.Scalar("renode.display") is { } display)
                     renode["display"] = new JsonObject { ["peripheral"] = display };
                 return renode.Count > 1 ? renode : "renode";
+            case "stlink":
+                var stlink = new JsonObject { ["type"] = "stlink" };
+                if (s.Scalar("stlink.port") is { } stport) stlink["port"] = stport;
+                if (s.Scalar("stlink.vid") is { } stvid) stlink["vid"] = stvid;
+                if (s.Scalar("stlink.pid") is { } stpid) stlink["pid"] = stpid;
+                return stlink.Count > 1 ? stlink : "stlink";
             default:
                 return server; // a user-defined preset name
         }

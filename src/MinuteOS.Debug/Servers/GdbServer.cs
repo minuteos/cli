@@ -51,8 +51,9 @@ public static class GdbServerFactory
             "qemu" => new QemuGdbServer(config, program, cwd, logger),
             "bmp" => new BmpGdbServer(config, logger),
             "renode" => new RenodeGdbServer(config, cwd, logger),
+            "stlink" => new Stlink.StlinkGdbServer(config, logger),
             _ => throw new NotSupportedException(
-                $"GDB server type '{type}' is not supported by `minuteos dap` (supported: qemu, bmp, renode)"),
+                $"GDB server type '{type}' is not supported by `minuteos dap` (supported: qemu, bmp, renode, stlink)"),
         };
     }
 }

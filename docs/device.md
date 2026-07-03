@@ -54,6 +54,24 @@ settings:
 - `erase` → the same session with `monitor erase_mass`.
 - `debug` → attaches gdb directly to the probe (there is no server process).
 
+## ST-Link (experimental, in-process GDB server)
+
+A board that sets `debug.server: stlink` is debugged through a **built-in GDB
+server**: the tool drives the ST-Link over USB (libusb) and hosts a GDB remote
+server in-process for gdb to attach to - no external `st-util`/openocd. It is a
+port of the [minute-debug] extension's ST-Link support and slots into the same
+`minuteos dap` server contract as bmp/qemu/renode.
+
+```yaml
+settings:
+  debug.server: stlink
+  # stlink.port: <serial>   # select among multiple probes (USB serial)
+```
+
+**Experimental / not hardware-verified** - ported from an incomplete branch; the
+USB response sizes and register ordering in particular still need validation on
+real silicon. The GDB remote protocol layer is exercised by an end-to-end test.
+
 ## SMU: target power (STLINK-V3PWR)
 
 The extension's SMU support (source-measure units; currently the STLINK-V3PWR)
