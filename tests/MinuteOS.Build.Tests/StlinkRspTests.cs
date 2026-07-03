@@ -53,6 +53,23 @@ public class StlinkRspTests : IAsyncLifetime
         Assert.Equal("aabbccdd", await Command("m20000000,4"));
     }
 
+    [Fact]
+    public async Task BreakpointsAndTargetDescription_Work()
+    {
+        await Command("qSupported:multiprocess+");
+        await Command("vAttach;1");
+
+        // Hardware breakpoint set/clear.
+        Assert.Equal("OK", await Command("Z1,20000000,2"));
+        Assert.Equal("OK", await Command("z1,20000000,2"));
+
+        // target.xml is served from the register metadata as one complete chunk.
+        var xml = await Command("qXfer:features:read:target.xml:0,1000");
+        Assert.StartsWith("l", xml);
+        Assert.Contains("<feature name=\"f\">", xml);
+        Assert.Contains("name=\"r0\"", xml);
+    }
+
     /// <summary>Sends one RSP packet and returns the decoded reply payload.</summary>
     private async Task<string> Command(string payload)
     {
