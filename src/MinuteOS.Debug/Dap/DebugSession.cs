@@ -37,7 +37,8 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
     private Lazy<ElfSymbols>? _symbols;
     private DisassemblyCache? _disassemblyCache;
     private Trace.TraceRecorder? _recorder;
-    private Trace.ISmuSampleSource? _traceSmu;
+    private Trace.ISmuSampleSource? _smuSource;
+    private int _smuRefs;
     private string? _cwd;
     private string? _programPath;
     private Trace.TimelineStore? _timeline;
@@ -356,15 +357,10 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
         var path = Path.GetFullPath(args["path"]?.GetValue<string>()
             ?? Path.Combine(_cwd ?? Environment.CurrentDirectory, "trace.mtrace"));
 
-        var recorder = new Trace.TraceRecorder(path);
-        // The seam for real V3PWR streaming acquisition; a no-op until then, so
-        // no power track is recorded yet.
-        var smu = new Trace.NullSmuSampleSource();
-        recorder.Attach(smu);
-        await smu.StartAsync(cancellationToken);
-
-        _traceSmu = smu;
-        _recorder = recorder;
+        _recorder = new Trace.TraceRecorder(path);
+        var smu = await AcquireSmuAsync(cancellationToken);
+        foreach (var channel in smu.Channels)
+            _recorder.DefineChannel(channel.Id, channel.Kind, channel.Scale, channel.Name, channel.Unit);
         await SendOutputAsync("console", $"Recording timeline to {path}\n");
         return new JsonObject { ["path"] = path };
     }
@@ -374,23 +370,46 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
     {
         if (_recorder is not { } recorder)
             return new JsonObject { ["recording"] = false };
-        _recorder = null;
+        _recorder = null; // stop the SMU fan-out feeding it before we finalize
 
         var path = recorder.Path;
         var events = recorder.EventCount;
-        await StopTraceSmuAsync(cancellationToken);
+        await ReleaseSmuAsync(cancellationToken);
         await recorder.DisposeAsync();
         await SendOutputAsync("console", $"Timeline written: {path} ({events} events)\n");
         return new JsonObject { ["path"] = path, ["events"] = events };
     }
 
-    private async Task StopTraceSmuAsync(CancellationToken cancellationToken)
+    // Current measurement is reference-counted like PC sampling: the SMU stream
+    // opens on the first consumer (timeline or recording) and closes on the last.
+    // One session-level subscription fans each sample out to whichever consumers
+    // are active, each stamping it on its own clock. A no-op without an SMU.
+
+    private async Task<Trace.ISmuSampleSource> AcquireSmuAsync(CancellationToken cancellationToken)
     {
-        if (_traceSmu is not { } smu)
+        if (_smuRefs++ == 0)
+        {
+            _smuSource = _probe?.Smu?.CreateSampleSource() ?? new Trace.NullSmuSampleSource();
+            _smuSource.Sample += OnSmuSample;
+            await _smuSource.StartAsync(cancellationToken);
+        }
+        return _smuSource!;
+    }
+
+    private async Task ReleaseSmuAsync(CancellationToken cancellationToken)
+    {
+        if (_smuSource is not { } source || _smuRefs == 0 || --_smuRefs != 0)
             return;
-        _traceSmu = null;
-        await smu.StopAsync(cancellationToken);
-        await smu.DisposeAsync();
+        _smuSource = null;
+        source.Sample -= OnSmuSample;
+        await source.StopAsync(cancellationToken);
+        await source.DisposeAsync();
+    }
+
+    private void OnSmuSample(Trace.SmuSample sample)
+    {
+        _timeline?.AddMeasurement(TimelineNowNs(), sample.Channel, sample.Raw);
+        _recorder?.RecordMeasurement(sample.Channel, sample.Raw);
     }
 
     // #endregion
@@ -398,10 +417,10 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
     // #region Live timeline (minuteos.timeline.* custom requests)
 
     /// <summary>
-    /// Starts feeding a queryable in-memory timeline (PC samples + logs now, SMU
-    /// measurements once acquisition lands) and ticking the client so it can pull
-    /// the visible window. The pie needs PC sampling enabled (profiling or
-    /// swo.profile) for PC events to flow.
+    /// Starts feeding a queryable in-memory timeline (PC samples, logs, and SMU
+    /// current) and ticking the client so it can pull the visible window. PC
+    /// sampling is enabled here (no-op without SWO); the power track needs an
+    /// <c>smu</c> in the launch configuration.
     /// </summary>
     private async Task<JsonObject> TimelineStart(CancellationToken cancellationToken)
     {
@@ -414,6 +433,9 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
         // Populate the PC pie without a separate "start profiling" step (no-op
         // when there is no SWO to sample from).
         await AcquirePcSamplingAsync(cancellationToken);
+        var smu = await AcquireSmuAsync(cancellationToken);
+        foreach (var channel in smu.Channels)
+            _timeline.DefineChannel(channel.Id, channel.Scale, channel.Name, channel.Unit);
         StartTimelineTicks();
         return new JsonObject { ["running"] = true };
     }
@@ -423,8 +445,9 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
         StopTimelineTicks();
         if (_timeline != null)
         {
-            _timeline = null;
+            _timeline = null; // stop the SMU fan-out feeding it first
             await ReleasePcSamplingAsync(cancellationToken);
+            await ReleaseSmuAsync(cancellationToken);
         }
         return new JsonObject { ["running"] = false };
     }
@@ -574,8 +597,17 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
         if (_recorder is { } recorder)
         {
             _recorder = null;
-            await StopTraceSmuAsync(CancellationToken.None);
             await recorder.DisposeAsync();
+        }
+        // Stop the SMU stream (sends `stop`) before the probe disposes the
+        // SessionSmu, which cuts power and closes the shared VCP.
+        if (_smuSource is { } smuSource)
+        {
+            _smuSource = null;
+            _smuRefs = 0;
+            smuSource.Sample -= OnSmuSample;
+            await smuSource.StopAsync(CancellationToken.None);
+            await smuSource.DisposeAsync();
         }
         if (_swoSession is { } swoSession)
         {

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using MinuteOS.Build;
+using MinuteOS.Debug.Trace;
 
 namespace MinuteOS.Debug;
 
@@ -17,23 +18,25 @@ public sealed class SessionSmu : IAsyncDisposable
 {
     private readonly StlinkSmu _smu;
     private readonly string _output;
+    private readonly int _frequencyHz;
     private readonly bool _stopPowerOff;
     private readonly ILogger _logger;
 
-    private SessionSmu(StlinkSmu smu, string output, bool stopPowerOff, ILogger logger)
+    private SessionSmu(StlinkSmu smu, string output, int frequencyHz, bool stopPowerOff, ILogger logger)
     {
         _smu = smu;
         _output = output;
+        _frequencyHz = frequencyHz;
         _stopPowerOff = stopPowerOff;
         _logger = logger;
     }
 
     /// <summary>
-    /// Brackets a session with the launch <c>smu</c> value (a type name or an
-    /// inline object). Returns null when no SMU is configured or it asks for no
-    /// lifecycle action (neither <c>startPowerOn</c> nor <c>stopPowerOff</c>) -
-    /// standalone power control stays the user's job then. Turns the output on
-    /// immediately when <c>startPowerOn</c>.
+    /// Opens the SMU control connection for the session when the launch
+    /// <c>smu</c> value selects one (a type name or an inline object); null when
+    /// no SMU is configured. Turns the output on immediately when
+    /// <c>startPowerOn</c>. The connection is kept for the session so it can also
+    /// stream measurements (see <see cref="CreateSampleSource"/>).
     /// </summary>
     public static SessionSmu? Create(JsonNode? smu, ILogger logger)
     {
@@ -47,11 +50,9 @@ public sealed class SessionSmu : IAsyncDisposable
 
         var startPowerOn = config["startPowerOn"]?.GetValue<bool>() ?? false;
         var stopPowerOff = config["stopPowerOff"]?.GetValue<bool>() ?? false;
-        if (!startPowerOn && !stopPowerOff)
-            return null;
-
         var output = config["output"]?.GetValue<string>() ?? "vout";
         var voltage = ParseVoltage(config["voltage"]);
+        var frequency = (int?)config["frequency"]?.GetValue<double>() ?? 10_000;
         var port = config["port"]?.GetValue<string>() ?? StlinkSmu.FindPort()
             ?? throw new InvalidOperationException(
                 "Failed to autodetect the STLINK-V3PWR control port; set `smu.port` (or smu.port in the launch configuration).");
@@ -69,8 +70,12 @@ public sealed class SessionSmu : IAsyncDisposable
             driver.Dispose();
             throw;
         }
-        return new SessionSmu(driver, output, stopPowerOff, logger);
+        return new SessionSmu(driver, output, frequency, stopPowerOff, logger);
     }
+
+    /// <summary>A current-measurement stream over this SMU's control connection.</summary>
+    public ISmuSampleSource CreateSampleSource()
+        => new StlinkSmuSampleSource(_smu, _output, _frequencyHz, _logger);
 
     private static double ParseVoltage(JsonNode? node)
     {

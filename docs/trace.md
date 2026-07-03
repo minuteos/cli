@@ -59,14 +59,19 @@ Logs and SMU measurements are always captured; **PC events require PC sampling
 to be enabled** (start profiling, or set `swo.profile`) so the DWT emits PC
 packets. A recording still in progress is finalized on disconnect.
 
-## SMU measurements (pluggable)
+## SMU measurements (current)
 
-The SMU sample stream is behind `ISmuSampleSource`. Real STLINK-V3PWR streaming
-acquisition (the `power_monitor` binary frame protocol) plugs in there and
-shares the `SessionSmu` connection; until then `NullSmuSampleSource` stands in
-and no power track is recorded. Everything downstream - channel definitions,
-delta-coded samples, export - is already wired, so enabling real acquisition is
-a localized change.
+With an `smu` in the launch configuration, current is streamed as a power
+channel via `StlinkSmuSampleSource`: it drives the `SessionSmu`'s control
+connection into **ascii_dec** streaming (`power_monitor` / `format ascii_dec` /
+`freq` / `start`) and parses one `mantissa×10^±exp` line per sample. The stream
+is reference-counted between the timeline and the recorder (like PC sampling) so
+one VCP serves both; a session without an SMU falls back to a no-op source.
+
+> The ascii command sequence and line format are the reverse-engineered protocol
+> (LPM01A / PowerShield lineage the V3PWR reuses) and are **not hardware-verified
+> yet**; only the line parser is unit-tested. The higher-rate binary (`bin_hexa`)
+> format is a future second decoder behind the same `ISmuSampleSource`.
 
 ## Querying (timeline view)
 

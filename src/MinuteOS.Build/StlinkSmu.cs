@@ -68,11 +68,69 @@ public sealed class StlinkSmu : IDisposable
     }
 
     /// <summary>
+    /// Configures ASCII (decimal) streaming at <paramref name="frequencyHz"/> Hz
+    /// with unbounded acquisition time. The current then streams as one line per
+    /// sample after <see cref="StartStream"/> until <see cref="StopStream"/>.
+    /// </summary>
+    public void ConfigureStream(int frequencyHz)
+    {
+        Execute("power_monitor");
+        Execute("format", "ascii_dec");
+        Execute("freq", frequencyHz.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Execute("acqtime", "0");
+    }
+
+    public void StartStream() => Send("start");
+
+    public void StopStream() => Send("stop");
+
+    /// <summary>Sends a raw command line without waiting for an ack (streaming start/stop).</summary>
+    public void Send(string command)
+    {
+        _logger.LogDebug("SMU> {Command}", command);
+        _transport.WriteLine(command);
+    }
+
+    /// <summary>Reads one line from the device (a sample or metadata), or null on timeout.</summary>
+    public string? ReadLine(TimeSpan timeout) => _transport.ReadLine(timeout);
+
+    /// <summary>
+    /// Parses one <c>ascii_dec</c> sample line into amperes: the value is
+    /// <c>mantissa × 10^±exponent</c> (e.g. <c>"5000-9"</c> = 5 µA). Metadata
+    /// lines (<c>TimeStamp…</c>, <c>ack…</c>) and anything else return false.
+    /// Matches the LPM01A/PowerShield ascii format the STLINK-V3PWR reuses.
+    /// </summary>
+    public static bool TryParseAmps(string line, out double amps)
+    {
+        amps = 0;
+        var s = line.Trim();
+        var split = -1;
+        for (var i = 1; i < s.Length; i++)
+        {
+            if ((s[i] == '+' || s[i] == '-') && char.IsDigit(s[i - 1]))
+            {
+                split = i;
+                break;
+            }
+        }
+        if (split < 0)
+            return false;
+
+        var culture = System.Globalization.CultureInfo.InvariantCulture;
+        if (!double.TryParse(s[..split], System.Globalization.NumberStyles.Float, culture, out var mantissa)
+            || !int.TryParse(s[(split + 1)..], out var exponent))
+            return false;
+
+        amps = mantissa * System.Math.Pow(10, s[split] == '-' ? -exponent : exponent);
+        return true;
+    }
+
+    /// <summary>
     /// Sends one command and waits for its <c>ack</c>. Argument formatting
     /// matches the extension: numbers become millis with an <c>m</c> suffix,
     /// booleans become on/off.
     /// </summary>
-    internal void Execute(params object[] args)
+    public void Execute(params object[] args)
     {
         var command = string.Join(' ', args.Select(FormatArg));
         _logger.LogDebug("SMU> {Command}", command);

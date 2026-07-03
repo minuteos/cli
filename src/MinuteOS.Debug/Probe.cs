@@ -25,6 +25,9 @@ public sealed class Probe(ProbeConfig config, ILogger logger) : IAsyncDisposable
     public IGdbServer Server => _server ?? throw new InvalidOperationException("Not connected");
     public TargetInfo Target { get; private set; } = new();
 
+    /// <summary>The session SMU connection, when an <c>smu</c> is configured (for power + measurement).</summary>
+    public SessionSmu? Smu => _smu;
+
     public async Task ConnectAsync(CancellationToken cancellationToken = default)
     {
         // Target power comes up before gdb attaches so swdp_scan can see the
