@@ -18,7 +18,7 @@ public class TraceExportCommand : LoggingCommand
     [Argument(Description = "The .mtrace file to export")]
     public string File { get; set; } = "";
 
-    [Option("--format", Description = "Output format (jsonl)")]
+    [Option("--format", Description = "Output format: jsonl (default) or perfetto (Chrome Trace Event / Perfetto)")]
     public string Format { get; set; } = "jsonl";
 
     [Option("--elf", Description = "Program ELF used to symbolicate PC samples")]
@@ -34,41 +34,27 @@ public class TraceExportCommand : LoggingCommand
             Logger.LogError("No such trace file: {File}", File);
             return 1;
         }
-        if (Format != "jsonl")
+        var format = Format.ToLowerInvariant();
+        if (format is not ("jsonl" or "perfetto" or "chrome"))
         {
-            Logger.LogError("Unsupported format '{Format}' (supported: jsonl)", Format);
+            Logger.LogError("Unsupported format '{Format}' (supported: jsonl, perfetto)", Format);
             return 1;
         }
 
-        Func<uint, FunctionSymbol?> resolve = _ => null;
-        if (Elf != null)
-        {
-            try
-            {
-                var symbols = ElfSymbols.Load(Elf);
-                resolve = pc => symbols.Resolve(pc);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning("Cannot load symbols from {Elf}: {Message}", Elf, ex.Message);
-            }
-        }
+        var symbolizer = Symbolizer.TryLoad(Elf);
+        if (Elf != null && symbolizer == null)
+            Logger.LogWarning("Cannot load symbols from {Elf}", Elf);
 
         await using var input = System.IO.File.OpenRead(File);
         var reader = new TraceReader(input);
-        var start = reader.Header.StartUnixNanos;
-        var channels = new Dictionary<int, ChannelDefEvent>();
 
         TextWriter output = Output != null ? new StreamWriter(Output) : Console.Out;
         try
         {
-            foreach (var e in reader.Events())
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (e is ChannelDefEvent def)
-                    channels[def.Channel] = def;
-                await output.WriteLineAsync(ToJson(e, start, channels, resolve).ToJsonString());
-            }
+            if (format == "jsonl")
+                await WriteJsonlAsync(output, reader, symbolizer, cancellationToken);
+            else
+                await output.WriteLineAsync(PerfettoExport.ToJson(reader.Events(), symbolizer).ToJsonString());
         }
         finally
         {
@@ -76,6 +62,20 @@ public class TraceExportCommand : LoggingCommand
                 await output.DisposeAsync();
         }
         return 0;
+    }
+
+    private static async Task WriteJsonlAsync(TextWriter output, TraceReader reader, Symbolizer? symbolizer,
+        CancellationToken cancellationToken)
+    {
+        var start = reader.Header.StartUnixNanos;
+        var channels = new Dictionary<int, ChannelDefEvent>();
+        foreach (var e in reader.Events())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (e is ChannelDefEvent def)
+                channels[def.Channel] = def;
+            await output.WriteLineAsync(ToJson(e, start, channels, pc => symbolizer?.Function(pc)).ToJsonString());
+        }
     }
 
     private static JsonObject ToJson(TraceEvent e, long start,
