@@ -7,15 +7,21 @@ namespace MinuteOS.Debug;
 
 /// <summary>
 /// Loads a native library that ships embedded in this assembly, so a
-/// single-file / NativeAOT build carries it without a system install. The
-/// per-platform binary (built without udev, so it needs nothing but libc) is
-/// embedded as a resource; on first use it is extracted to a content-addressed
-/// cache directory and <see cref="NativeLibrary.Load(string)"/>ed under its
-/// real soname. Once resident, any subsequent P/Invoke or resolver that asks
-/// for the same soname binds to this copy - so the actual DllImports (in
-/// LibUsbDotNet) are left untouched. Best-effort: if the current platform has
-/// no embedded copy, or extraction fails, it no-ops and normal resolution
-/// (a system-installed library) takes over.
+/// single-file / NativeAOT build carries the library itself without a separate
+/// install. The per-platform binary is the official/distro build, embedded as
+/// a resource; on first use it is extracted to a content-addressed cache
+/// directory and <see cref="NativeLibrary.Load(string)"/>ed under its real
+/// soname. Once resident, any subsequent P/Invoke or resolver that asks for the
+/// same soname binds to this copy - so the actual DllImports (in LibUsbDotNet)
+/// are left untouched. Best-effort: if the current platform has no embedded
+/// copy, or extraction/load fails, it no-ops and normal resolution (a
+/// system-installed library) takes over.
+///
+/// Note: the embedded library only carries its own code, not its transitive
+/// dependencies - the official Linux libusb still links <c>libudev</c>/
+/// <c>libcap</c>, which the dynamic loader resolves from the system when the
+/// extracted copy is loaded. Those are present on any systemd host; minimal
+/// images without them fall back to a system libusb (or need it installed).
 /// </summary>
 public static class EmbeddedNativeLibrary
 {
