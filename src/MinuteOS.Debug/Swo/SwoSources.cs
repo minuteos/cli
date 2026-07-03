@@ -54,28 +54,47 @@ public static class SwoSourceFactory
 }
 
 /// <summary>
-/// SWO from a Black Magic Probe. The extension claims the BMP's trace USB
-/// interface directly; without a user-space USB stack the CLI reads the
-/// stream from a device path instead (<c>port</c>: e.g. a tty exposed for the
-/// trace channel). Enabling probes the firmware's command set - different BMP
-/// versions use <c>swo enable</c> vs <c>traceswo enable</c>.
+/// SWO from a Black Magic Probe. The probe exposes the trace stream on a
+/// dedicated USB bulk interface; by default the CLI claims it directly via
+/// libusb (the port of the extension's <c>services/usb.ts</c>), so SWO works
+/// with no manual setup on the same platforms the extension supported, Windows
+/// included. An explicit <c>port</c> (a device path, e.g. one exposed by a udev
+/// rule) bypasses the USB claim. Enabling probes the firmware's command set -
+/// different BMP versions use <c>swo enable</c> vs <c>traceswo enable</c>.
 /// </summary>
 public sealed class BmpSwo(JsonObject config, ILogger logger) : ISwoSource
 {
-    private FileStream? _stream;
+    // The BMP trace-capture interface (the extension's built-in BMP SWO preset).
+    private const ushort DefaultVendorId = 0x1d50;
+    private const ushort DefaultProductId = 0x6018;
+    private const string DefaultInterface = "Trace Capture";
 
-    public Stream? Stream => _stream;
+    private FileStream? _fileStream;
+    private UsbTraceStream? _usb;
+
+    public Stream? Stream => _fileStream ?? _usb?.Stream;
 
     public Task ConnectAsync(CancellationToken cancellationToken = default)
     {
         if (config["port"]?.GetValue<string>() is { } port)
         {
-            _stream = new FileStream(port, FileMode.Open, FileAccess.Read);
+            _fileStream = new FileStream(port, FileMode.Open, FileAccess.Read);
             logger.LogInformation("SWO stream from {Port}", port);
+            return Task.CompletedTask;
         }
-        else
+
+        var vendorId = UsbTraceStream.ParseId(config["vid"]) ?? DefaultVendorId;
+        var productId = UsbTraceStream.ParseId(config["pid"]) ?? DefaultProductId;
+        var interfaceName = config["interface"]?.GetValue<string>() ?? DefaultInterface;
+        try
         {
-            logger.LogWarning("BMP SWO needs a 'port' (device path of the trace channel); SWO disabled");
+            _usb = UsbTraceStream.Open(vendorId, productId, interfaceName, logger);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                "BMP SWO USB capture unavailable ({Message}); set a 'port' device path to read the trace channel. SWO disabled",
+                ex.Message);
         }
         return Task.CompletedTask;
     }
@@ -93,10 +112,11 @@ public sealed class BmpSwo(JsonObject config, ILogger logger) : ISwoSource
         await mi.MonitorAsync(hasSwoCommand ? "swo enable" : "traceswo enable", cancellationToken);
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
-        _stream?.Dispose();
-        return ValueTask.CompletedTask;
+        _fileStream?.Dispose();
+        if (_usb != null)
+            await _usb.DisposeAsync();
     }
 }
 
