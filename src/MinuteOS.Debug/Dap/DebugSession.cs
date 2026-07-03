@@ -39,6 +39,11 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
     private Trace.TraceRecorder? _recorder;
     private Trace.ISmuSampleSource? _traceSmu;
     private string? _cwd;
+    private string? _programPath;
+    private Trace.TimelineStore? _timeline;
+    private Trace.Symbolizer? _symbolizer;
+    private long _timelineStart;
+    private CancellationTokenSource? _timelineTick;
 
     private readonly Dictionary<int, JsonObject> _frameIdMap = [];
     private readonly Dictionary<object, GdbVar> _varMap = [];
@@ -97,6 +102,10 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
                 "minuteos.profile.stop" => await ProfileStopAsync(args, cancellationToken),
                 "minuteos.trace.start" => await TraceStartAsync(args, cancellationToken),
                 "minuteos.trace.stop" => await TraceStopAsync(cancellationToken),
+                "minuteos.timeline.start" => TimelineStart(),
+                "minuteos.timeline.stop" => TimelineStop(),
+                "minuteos.timeline.histogram" => TimelineHistogram(args),
+                "minuteos.timeline.series" => TimelineSeries(args),
                 _ => throw new NotSupportedException($"Unsupported request '{command}'"),
             };
             await connection.SendResponseAsync(request, success: true, body, cancellationToken: cancellationToken);
@@ -145,6 +154,7 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
         var program = config["program"]?.GetValue<string>()
             ?? throw new InvalidOperationException("Launch configuration has no 'program'");
         var programPath = Path.GetFullPath(program, cwd != null ? Path.GetFullPath(cwd) : Environment.CurrentDirectory);
+        _programPath = programPath;
         _symbols = new Lazy<ElfSymbols>(() => ElfSymbols.Load(programPath));
 
         var probeConfig = new ProbeConfig
@@ -250,6 +260,7 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
                 _ = SendOutputAsync("stdout", System.Text.Encoding.UTF8.GetString(packet.Data));
             _profiler.OnPacket(packet);
             _recorder?.OnSwoPacket(packet);
+            _timeline?.OnSwoPacket(TimelineNowNs(), packet);
         }, logger);
         await _swoSession.StartAsync(cancellationToken);
     }
@@ -363,6 +374,89 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
 
     // #endregion
 
+    // #region Live timeline (minuteos.timeline.* custom requests)
+
+    /// <summary>
+    /// Starts feeding a queryable in-memory timeline (PC samples + logs now, SMU
+    /// measurements once acquisition lands) and ticking the client so it can pull
+    /// the visible window. The pie needs PC sampling enabled (profiling or
+    /// swo.profile) for PC events to flow.
+    /// </summary>
+    private JsonObject TimelineStart()
+    {
+        _timeline = new Trace.TimelineStore();
+        _timelineStart = System.Diagnostics.Stopwatch.GetTimestamp();
+        _symbolizer ??= Trace.Symbolizer.TryLoad(_programPath);
+        StartTimelineTicks();
+        return new JsonObject { ["running"] = true };
+    }
+
+    private JsonObject TimelineStop()
+    {
+        StopTimelineTicks();
+        _timeline = null;
+        return new JsonObject { ["running"] = false };
+    }
+
+    private JsonObject TimelineHistogram(JsonObject args)
+    {
+        if (_timeline is not { } store)
+            throw new InvalidOperationException("The timeline is not running");
+        var (from, to) = TimelineWindow(args, store);
+        var granularity = Trace.TimelineJson.ParseGranularity(args["granularity"]?.GetValue<string>());
+        var top = args["top"] is { } t ? (int)MiClient.ParseNumberLong(t) : 100;
+        return Trace.TimelineJson.ToJson(store.Histogram(from, to, granularity, _symbolizer, top));
+    }
+
+    private JsonObject TimelineSeries(JsonObject args)
+    {
+        if (_timeline is not { } store)
+            throw new InvalidOperationException("The timeline is not running");
+        var (from, to) = TimelineWindow(args, store);
+        var maxPoints = args["maxPoints"] is { } m ? (int)MiClient.ParseNumberLong(m) : 600;
+        return Trace.TimelineJson.ToJson(store.Series(from, to, maxPoints));
+    }
+
+    private static (long From, long To) TimelineWindow(JsonObject args, Trace.TimelineStore store)
+    {
+        var (start, end) = store.Range();
+        return (args["from"] is { } f ? MiClient.ParseNumberLong(f) : start,
+            args["to"] is { } t ? MiClient.ParseNumberLong(t) : end);
+    }
+
+    private long TimelineNowNs() => System.Diagnostics.Stopwatch.GetElapsedTime(_timelineStart).Ticks * 100;
+
+    private void StartTimelineTicks()
+    {
+        StopTimelineTicks();
+        var cts = new CancellationTokenSource();
+        _timelineTick = cts;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    await Task.Delay(250, cts.Token);
+                    if (_timeline != null)
+                        await connection.SendEventAsync("minuteos.timeline",
+                            new JsonObject { ["now"] = TimelineNowNs() }, cts.Token);
+                }
+            }
+            catch (OperationCanceledException) { /* stopped */ }
+            catch (Exception ex) { logger.LogDebug(ex, "Timeline tick loop ended"); }
+        }, cts.Token);
+    }
+
+    private void StopTimelineTicks()
+    {
+        _timelineTick?.Cancel();
+        _timelineTick?.Dispose();
+        _timelineTick = null;
+    }
+
+    // #endregion
+
     /// <summary>
     /// Resolves the SVD layers: a model name (or .svd path), or a list of
     /// <c>{ model, peripherals }</c> layers; model "target" uses what the
@@ -444,6 +538,8 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
 
     private async Task CleanupAsync()
     {
+        StopTimelineTicks();
+        _timeline = null;
         if (_recorder is { } recorder)
         {
             _recorder = null;

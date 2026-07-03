@@ -68,6 +68,30 @@ and no power track is recorded. Everything downstream - channel definitions,
 delta-coded samples, export - is already wired, so enabling real acquisition is
 a localized change.
 
+## Querying (timeline view)
+
+The same data answers the two queries a timeline UI needs - a PC histogram (the
+pie) and a downsampled power/log series (the chart) - through one query core
+(`TimelineStore`), used both live and for replay.
+
+**Live**, over the running session:
+
+- `minuteos.timeline.start` / `.stop` - begin/stop retaining samples and ticking.
+- `minuteos.timeline` event `{ now }` - a ~250 ms tick prompting the client to pull.
+- `minuteos.timeline.histogram` `{ from?, to?, granularity?, top? }` - PC buckets.
+- `minuteos.timeline.series` `{ from?, to?, maxPoints? }` - power points + logs.
+
+`granularity` is `function` (default), `line`, or `address`. Line resolution
+comes from a DWARF `.debug_line` reader (`MinuteOS.Debug/Dwarf`), function from
+`.symtab`.
+
+**Replay**, over a saved recording (same shapes, no session needed):
+
+```bash
+minuteos trace histogram trace.mtrace --elf app.axf -g line [--from ns --to ns]
+minuteos trace series    trace.mtrace [--max-points 600]
+```
+
 ## Exporting
 
 ```bash
