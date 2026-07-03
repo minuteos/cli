@@ -50,27 +50,40 @@ public sealed class SessionSmu : IAsyncDisposable
 
         var startPowerOn = config["startPowerOn"]?.GetValue<bool>() ?? false;
         var stopPowerOff = config["stopPowerOff"]?.GetValue<bool>() ?? false;
+        var brackets = startPowerOn || stopPowerOff;
         var output = config["output"]?.GetValue<string>() ?? "vout";
         var voltage = ParseVoltage(config["voltage"]);
         var frequency = (int?)config["frequency"]?.GetValue<double>() ?? 10_000;
-        var port = config["port"]?.GetValue<string>() ?? StlinkSmu.FindPort()
-            ?? throw new InvalidOperationException(
-                "Failed to autodetect the STLINK-V3PWR control port; set `smu.port` (or smu.port in the launch configuration).");
 
-        logger.LogInformation("SMU: STLINK-V3PWR on {Port}, {Output} @ {Voltage} V", port, output, voltage);
-        var driver = new StlinkSmu(new TtyTransport(port), logger);
         try
         {
-            driver.Configure(output, voltage);
-            if (startPowerOn)
-                driver.Power(output, true);
+            var port = config["port"]?.GetValue<string>() ?? StlinkSmu.FindPort()
+                ?? throw new InvalidOperationException(
+                    "Failed to autodetect the STLINK-V3PWR control port; set `smu.port`.");
+
+            logger.LogInformation("SMU: STLINK-V3PWR on {Port}, {Output} @ {Voltage} V", port, output, voltage);
+            var driver = new StlinkSmu(new TtyTransport(port), logger);
+            try
+            {
+                driver.Configure(output, voltage);
+                if (startPowerOn)
+                    driver.Power(output, true);
+            }
+            catch
+            {
+                driver.Dispose();
+                throw;
+            }
+            return new SessionSmu(driver, output, frequency, stopPowerOff, logger);
         }
-        catch
+        catch (Exception ex) when (!brackets)
         {
-            driver.Dispose();
-            throw;
+            // Measurement is optional - don't fail the debug session when the SMU
+            // is not connected. Power bracketing (startPowerOn/stopPowerOff) still
+            // fails fast, since the target's power depends on it.
+            logger.LogWarning("SMU unavailable ({Message}); power monitoring disabled", ex.Message);
+            return null;
         }
-        return new SessionSmu(driver, output, frequency, stopPowerOff, logger);
     }
 
     /// <summary>A current-measurement stream over this SMU's control connection.</summary>
