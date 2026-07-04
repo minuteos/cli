@@ -15,16 +15,19 @@ namespace MinuteOS.Debug.Trace;
 /// </summary>
 public sealed class TraceRecorder : IAsyncDisposable
 {
+    private static readonly TimeSpan DefaultFlushInterval = TimeSpan.FromMilliseconds(500);
+
     private readonly FileStream _file;
     private readonly TraceWriter _writer;
     private readonly long _startTimestamp;
+    private readonly Timer _flushTimer;
     private ISmuSampleSource? _attached;
     private long _eventCount;
 
     public string Path { get; }
     public long EventCount => Interlocked.Read(ref _eventCount);
 
-    public TraceRecorder(string path)
+    public TraceRecorder(string path, TimeSpan? flushInterval = null)
     {
         Path = path;
         _file = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
@@ -32,6 +35,12 @@ public sealed class TraceRecorder : IAsyncDisposable
         _writer = new TraceWriter(_file, startUnixNanos);
         _startTimestamp = Stopwatch.GetTimestamp();
         Mark(MarkKind.SessionStart);
+
+        // Push completed records to the OS on a cadence so a killed session (or a
+        // reader tailing the live file) sees data before clean shutdown. The
+        // writer's lock keeps every flush on a record boundary.
+        var interval = flushInterval ?? DefaultFlushInterval;
+        _flushTimer = new Timer(_ => _writer.Flush(), null, interval, interval);
     }
 
     public void RecordPc(uint pc)
@@ -103,6 +112,9 @@ public sealed class TraceRecorder : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        // Awaiting the timer's disposal drains any in-flight flush callback, so
+        // nothing touches the writer or file after this point.
+        await _flushTimer.DisposeAsync();
         if (_attached != null)
             _attached.Sample -= OnSmuSample;
         _writer.Flush();

@@ -137,6 +137,45 @@ public class TraceFormatTests
         }
     }
 
+    [Fact]
+    public async Task Recorder_FlushesToDiskWhileLive()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"minuteos-live-{Guid.NewGuid():N}.mtrace");
+        try
+        {
+            await using var recorder = new TraceRecorder(path, TimeSpan.FromMilliseconds(20));
+            recorder.RecordPc(0x0800_0100);
+            recorder.RecordPc(0x0800_0104);
+
+            // The periodic flush must make the events readable from the still-open
+            // file. Poll (the first flush lands the header too) until they appear.
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            List<TraceEvent> events = [];
+            while (DateTime.UtcNow < deadline)
+            {
+                try
+                {
+                    using var read = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    events = new TraceReader(read).Events().ToList();
+                }
+                catch (EndOfStreamException)
+                {
+                    // Header not flushed yet - the file is still empty.
+                }
+                if (events.Any(e => e is PcSampleEvent { Pc: 0x0800_0104 }))
+                    break;
+                await Task.Delay(20);
+            }
+
+            Assert.Contains(events, e => e is PcSampleEvent { Pc: 0x0800_0100 });
+            Assert.Contains(events, e => e is PcSampleEvent { Pc: 0x0800_0104 });
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     private sealed class FakeSmuSource(params SmuChannel[] channels) : ISmuSampleSource
     {
         public IReadOnlyList<SmuChannel> Channels { get; } = channels;
