@@ -70,9 +70,9 @@ public sealed class BmpSwo(JsonObject config, ILogger logger) : ISwoSource
     private const string DefaultInterface = "Trace Capture";
 
     private FileStream? _fileStream;
-    private UsbTraceStream? _usb;
+    private Usb.UsbBulkStream? _usb;
 
-    public Stream? Stream => _fileStream ?? _usb?.Stream;
+    public Stream? Stream => _fileStream ?? (Stream?)_usb;
 
     public Task ConnectAsync(CancellationToken cancellationToken = default)
     {
@@ -88,7 +88,10 @@ public sealed class BmpSwo(JsonObject config, ILogger logger) : ISwoSource
         var interfaceName = config["interface"]?.GetValue<string>() ?? DefaultInterface;
         try
         {
-            _usb = UsbTraceStream.Open(vendorId, productId, interfaceName, logger);
+            _usb = Usb.UsbBulkStream.Claim(vendorId, [productId], serial: null,
+                i => i.Interface?.Contains(interfaceName, StringComparison.OrdinalIgnoreCase) == true
+                    && Usb.UsbBulkInterface.HasBulkIn(i),
+                $"SWO trace interface '{interfaceName}'", logger);
         }
         catch (Exception ex)
         {
@@ -112,11 +115,11 @@ public sealed class BmpSwo(JsonObject config, ILogger logger) : ISwoSource
         await mi.MonitorAsync(hasSwoCommand ? "swo enable" : "traceswo enable", cancellationToken);
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _fileStream?.Dispose();
-        if (_usb != null)
-            await _usb.DisposeAsync();
+        _usb?.Dispose(); // stops the context event loop and releases the interface
+        return ValueTask.CompletedTask;
     }
 }
 
