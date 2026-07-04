@@ -48,6 +48,12 @@ internal sealed class UsbBulkInterface : IDisposable
                     $"No {description} found - is it connected" + (serial != null ? $" (serial {serial})?" : "?"));
             device.Open();
 
+            // Let libusb take an interface back from a kernel driver (e.g. Linux
+            // cdc_acm binding a CDC serial function). No-op / unsupported on
+            // Windows, where WinUSB owns the interface outright.
+            try { (device as UsbDevice)?.SetAutoDetachKernelDriver(true); }
+            catch { /* unsupported on this platform - the claim below will tell us */ }
+
             foreach (var cfg in device.Configs)
             {
                 foreach (var iface in cfg.Interfaces)
@@ -71,6 +77,18 @@ internal sealed class UsbBulkInterface : IDisposable
             context.Dispose();
             throw;
         }
+    }
+
+    /// <summary>
+    /// CDC SET_CONTROL_LINE_STATE - asserts DTR/RTS on the claimed interface so a
+    /// CDC-ACM device starts transmitting (the kernel driver would normally do
+    /// this on tty open). Best-effort; some devices/stacks don't require it.
+    /// </summary>
+    public void SetControlLineState(bool dtr, bool rts)
+    {
+        var value = (short)((dtr ? 1 : 0) | (rts ? 2 : 0));
+        var setup = new UsbSetupPacket(0x21, 0x22, value, (short)_number, 0);
+        _device.ControlTransfer(setup, Array.Empty<byte>(), 0, 0);
     }
 
     public UsbEndpointReader OpenReader(int bufferSize)

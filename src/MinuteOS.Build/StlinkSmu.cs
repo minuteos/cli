@@ -35,29 +35,6 @@ public sealed class StlinkSmu : IDisposable
         _logger = logger;
     }
 
-    /// <summary>
-    /// Finds the SMU's control port: /dev/serial/by-id links containing
-    /// STLINK-V3PWR, preferring USB interface 1 (the control channel).
-    /// </summary>
-    public static string? FindPort()
-    {
-        const string byId = "/dev/serial/by-id";
-        if (!Directory.Exists(byId))
-            return null;
-
-        var candidates = Directory.EnumerateFiles(byId)
-            .Where(p => Path.GetFileName(p).Contains("STLINK-V3PWR", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(p => Path.GetFileName(p).Contains("if01", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
-            .ToList();
-
-        if (candidates.Count == 0)
-            return null;
-        var info = new FileInfo(candidates[0]);
-        return info.LinkTarget != null
-            ? Path.GetFullPath(Path.Combine(byId, info.LinkTarget))
-            : candidates[0];
-    }
-
     /// <summary>Initializes the session: quiet prompt, binary-hex format, output voltage.</summary>
     public async Task ConfigureAsync(string output, double voltage, CancellationToken cancellationToken = default)
     {

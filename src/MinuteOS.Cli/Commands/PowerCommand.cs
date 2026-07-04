@@ -1,4 +1,5 @@
 using MinuteOS.Build;
+using MinuteOS.Debug.Usb;
 using triaxis.CommandLine;
 
 namespace MinuteOS.Cli.Commands;
@@ -58,17 +59,17 @@ public class PowerCommand : LoggingCommand
             : double.TryParse(settings.Scalar("smu.voltage"), System.Globalization.CultureInfo.InvariantCulture, out var v) ? v
             : 3.3;
 
-        var port = Port ?? settings.Scalar("smu.port") ?? StlinkSmu.FindPort();
-        if (port == null)
-        {
-            Logger.LogError("Failed to autodetect the STLINK-V3PWR control port; use --port or set `smu.port`.");
-            return 1;
-        }
-
-        Logger.LogInformation("SMU: STLINK-V3PWR on {Port}, {Output} @ {Voltage} V", port, output, voltage);
+        // libusb by default (cross-platform, no device path); --port / smu.port
+        // opts into the tty transport for a specific serial node.
+        var explicitPort = Port ?? settings.Scalar("smu.port");
+        Logger.LogInformation("SMU: STLINK-V3PWR ({Transport}), {Output} @ {Voltage} V",
+            explicitPort ?? "usb", output, voltage);
         try
         {
-            using var smu = new StlinkSmu(new TtyTransport(port), Logger);
+            ISmuTransport transport = explicitPort != null
+                ? new TtyTransport(explicitPort)
+                : UsbCdcTransport.Open(null, Logger);
+            using var smu = new StlinkSmu(transport, Logger);
             await smu.ConfigureAsync(output, voltage, cancellationToken);
             await smu.PowerAsync(output, on, cancellationToken);
         }

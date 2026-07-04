@@ -58,12 +58,17 @@ public sealed class SessionSmu : IAsyncDisposable
 
         try
         {
-            var port = config["port"]?.GetValue<string>() ?? StlinkSmu.FindPort()
-                ?? throw new InvalidOperationException(
-                    "Failed to autodetect the STLINK-V3PWR control port; set `smu.port`.");
+            // libusb by default (cross-platform, no device path); an explicit
+            // `smu.port` opts into the tty transport for a specific serial node.
+            var explicitPort = config["port"]?.GetValue<string>();
+            var serial = config["serial"]?.GetValue<string>();
+            ISmuTransport transport = explicitPort != null
+                ? new TtyTransport(explicitPort)
+                : Usb.UsbCdcTransport.Open(serial, logger);
 
-            logger.LogInformation("SMU: STLINK-V3PWR on {Port}, {Output} @ {Voltage} V", port, output, voltage);
-            var driver = new StlinkSmu(new TtyTransport(port), logger);
+            logger.LogInformation("SMU: STLINK-V3PWR ({Transport}), {Output} @ {Voltage} V",
+                explicitPort ?? "usb", output, voltage);
+            var driver = new StlinkSmu(transport, logger);
             try
             {
                 await driver.ConfigureAsync(output, voltage, cancellationToken);
