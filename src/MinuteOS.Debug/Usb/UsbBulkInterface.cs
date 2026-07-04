@@ -91,6 +91,15 @@ internal sealed class UsbBulkInterface : IDisposable
         _device.ControlTransfer(setup, Array.Empty<byte>(), 0, 0);
     }
 
+    /// <summary>
+    /// Runs the context's libusb event loop (one shared background thread) so
+    /// asynchronous transfers on this device complete. Required before any
+    /// <c>*Async</c> transfer; a no-op-to-start for the synchronous transfer API.
+    /// </summary>
+    public void StartEventHandling() => _context.StartHandlingEvents();
+
+    public void StopEventHandling() => _context.StopHandlingEvents();
+
     public UsbEndpointReader OpenReader(int bufferSize)
         => _device.OpenEndpointReader((ReadEndpointID)Endpoint(input: true), bufferSize, EndpointType.Bulk);
 
