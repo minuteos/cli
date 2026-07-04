@@ -32,7 +32,7 @@ public sealed class Probe(ProbeConfig config, ILogger logger) : IAsyncDisposable
     {
         // Target power comes up before gdb attaches so swdp_scan can see the
         // device; it is cut on teardown (see DisposeAsync).
-        _smu = SessionSmu.Create(config.Smu, logger);
+        _smu = await SessionSmu.CreateAsync(config.Smu, logger, cancellationToken);
 
         _gdb = new MiClient(logger);
         _server = GdbServerFactory.Create(config.Server, config.Program, config.Cwd, logger);

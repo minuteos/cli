@@ -29,7 +29,7 @@ public class PowerCommand : LoggingCommand
     [Option("--voltage", Description = "Output voltage in volts (default from smu.voltage, else 3.3)")]
     public double Voltage { get; set; }
 
-    public Task<int> ExecuteAsync(CancellationToken cancellationToken)
+    public async Task<int> ExecuteAsync(CancellationToken cancellationToken)
     {
         bool on;
         switch (State.ToLowerInvariant())
@@ -38,7 +38,7 @@ public class PowerCommand : LoggingCommand
             case "off": on = false; break;
             default:
                 Logger.LogError("Specify 'on' or 'off'.");
-                return Task.FromResult(1);
+                return 1;
         }
 
         // Settings are optional here - the SMU works without a project too.
@@ -62,22 +62,22 @@ public class PowerCommand : LoggingCommand
         if (port == null)
         {
             Logger.LogError("Failed to autodetect the STLINK-V3PWR control port; use --port or set `smu.port`.");
-            return Task.FromResult(1);
+            return 1;
         }
 
         Logger.LogInformation("SMU: STLINK-V3PWR on {Port}, {Output} @ {Voltage} V", port, output, voltage);
         try
         {
             using var smu = new StlinkSmu(new TtyTransport(port), Logger);
-            smu.Configure(output, voltage);
-            smu.Power(output, on);
+            await smu.ConfigureAsync(output, voltage, cancellationToken);
+            await smu.PowerAsync(output, on, cancellationToken);
         }
         catch (Exception ex)
         {
             Logger.LogError("SMU operation failed: {Message}", ex.Message);
-            return Task.FromResult(1);
+            return 1;
         }
 
-        return Task.FromResult(0);
+        return 0;
     }
 }

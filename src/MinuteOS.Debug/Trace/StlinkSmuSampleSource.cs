@@ -7,8 +7,8 @@ namespace MinuteOS.Debug.Trace;
 /// Streams STLINK-V3PWR current measurements as <see cref="SmuSample"/>s in
 /// ascii_dec mode (one <c>mantissa×10^±exp</c> line per sample). It drives the
 /// SessionSmu's existing control connection - switching it into streaming and
-/// draining lines on a background reader - so power control and measurement
-/// share the one VCP.
+/// draining lines on an async completion-driven loop (no owned thread) - so
+/// power control and measurement share the one VCP.
 ///
 /// EXPERIMENTAL / hardware-unverified: the command sequence and ascii line
 /// format are the reverse-engineered protocol (LPM01A / PowerShield lineage
@@ -25,6 +25,7 @@ public sealed class StlinkSmuSampleSource : ISmuSampleSource
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _cts = new();
     private Task? _reader;
+    private long _samples;
 
     public StlinkSmuSampleSource(StlinkSmu smu, string output, int frequencyHz, ILogger logger)
     {
@@ -40,44 +41,50 @@ public sealed class StlinkSmuSampleSource : ISmuSampleSource
 
     public event Action<SmuSample>? Sample;
 
-    public Task StartAsync(CancellationToken cancellationToken = default)
+    public async Task StartAsync(CancellationToken cancellationToken = default)
     {
-        _smu.Power(_output, true); // current only flows to a powered output
-        _smu.ConfigureStream(_frequencyHz);
-        _smu.StartStream();
-        _reader = Task.Run(ReadLoop, CancellationToken.None);
-        return Task.CompletedTask;
+        await _smu.PowerAsync(_output, true, cancellationToken); // current only flows to a powered output
+        await _smu.ConfigureStreamAsync(_frequencyHz, cancellationToken);
+        await _smu.StartStreamAsync(cancellationToken);
+
+        // The loop is I/O-completion-driven: it awaits the next line and does its
+        // tiny parse/dispatch on the continuation, so no thread is parked on the
+        // stream. Not awaited - it runs until cancellation.
+        _reader = ReadLoopAsync();
+        _ = WarnIfSilentAsync();
     }
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
         await _cts.CancelAsync();
-        if (_reader != null)
-        {
-            try { await _reader; } catch { /* best effort */ }
-        }
+        // Halt the byte flow first so a read blocked on the next sample completes,
+        // then drain the loop.
         try
         {
-            _smu.StopStream();
+            await _smu.StopStreamAsync();
         }
         catch (Exception ex)
         {
             _logger.LogDebug("Stopping the SMU stream failed: {Message}", ex.Message);
         }
+        if (_reader != null)
+        {
+            try { await _reader; } catch { /* best effort */ }
+        }
     }
 
-    private void ReadLoop()
+    private async Task ReadLoopAsync()
     {
-        var started = System.Diagnostics.Stopwatch.GetTimestamp();
-        var samples = 0L;
-        var warned = false;
-
         while (!_cts.IsCancellationRequested)
         {
             string? line;
             try
             {
-                line = _smu.ReadLine(TimeSpan.FromMilliseconds(200));
+                line = await _smu.ReadLineAsync(_cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
             }
             catch (Exception ex)
             {
@@ -85,26 +92,40 @@ public sealed class StlinkSmuSampleSource : ISmuSampleSource
                 break;
             }
 
-            if (line != null && StlinkSmu.TryParseAmps(line, out var amps))
+            if (line == null)
             {
-                samples++;
-                try
-                {
-                    // A faulting consumer must not kill the reader.
-                    Sample?.Invoke(new SmuSample(CurrentChannel, (long)Math.Round(amps * 1e9)));
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug("SMU sample handler threw: {Message}", ex.Message);
-                }
+                _logger.LogWarning("SMU stream closed");
+                break;
             }
-            else if (!warned && samples == 0
-                && System.Diagnostics.Stopwatch.GetElapsedTime(started) > TimeSpan.FromSeconds(3))
+
+            if (_cts.IsCancellationRequested || !StlinkSmu.TryParseAmps(line, out var amps))
+                continue;
+
+            Interlocked.Increment(ref _samples);
+            try
             {
-                warned = true;
-                _logger.LogWarning("SMU: no current samples after 3s - is the output powered and streaming?");
+                // A faulting consumer must not kill the reader.
+                Sample?.Invoke(new SmuSample(CurrentChannel, (long)Math.Round(amps * 1e9)));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("SMU sample handler threw: {Message}", ex.Message);
             }
         }
+    }
+
+    private async Task WarnIfSilentAsync()
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(3), _cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        if (Interlocked.Read(ref _samples) == 0)
+            _logger.LogWarning("SMU: no current samples after 3s - is the output powered and streaming?");
     }
 
     public async ValueTask DisposeAsync()

@@ -38,7 +38,8 @@ public sealed class SessionSmu : IAsyncDisposable
     /// <c>startPowerOn</c>. The connection is kept for the session so it can also
     /// stream measurements (see <see cref="CreateSampleSource"/>).
     /// </summary>
-    public static SessionSmu? Create(JsonNode? smu, ILogger logger)
+    public static async Task<SessionSmu?> CreateAsync(JsonNode? smu, ILogger logger,
+        CancellationToken cancellationToken = default)
     {
         if (smu is null)
             return null;
@@ -65,9 +66,9 @@ public sealed class SessionSmu : IAsyncDisposable
             var driver = new StlinkSmu(new TtyTransport(port), logger);
             try
             {
-                driver.Configure(output, voltage);
+                await driver.ConfigureAsync(output, voltage, cancellationToken);
                 if (startPowerOn)
-                    driver.Power(output, true);
+                    await driver.PowerAsync(output, true, cancellationToken);
             }
             catch
             {
@@ -104,18 +105,17 @@ public sealed class SessionSmu : IAsyncDisposable
         }
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         try
         {
             if (_stopPowerOff)
-                _smu.Power(_output, false);
+                await _smu.PowerAsync(_output, false);
         }
         catch (Exception ex)
         {
             _logger.LogWarning("Turning off the SMU failed: {Message}", ex.Message);
         }
         _smu.Dispose();
-        return ValueTask.CompletedTask;
     }
 }

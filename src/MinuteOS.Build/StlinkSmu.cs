@@ -7,8 +7,13 @@ namespace MinuteOS.Build;
 /// <summary>Transport to an SMU's control serial port (abstracted for tests).</summary>
 public interface ISmuTransport : IDisposable
 {
-    void WriteLine(string line);
-    string? ReadLine(TimeSpan timeout);
+    Task WriteLineAsync(string line, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Awaits the next line off the wire; null at end of stream. Completion-driven
+    /// so a continuous stream needs no owned thread.
+    /// </summary>
+    ValueTask<string?> ReadLineAsync(CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -54,45 +59,46 @@ public sealed class StlinkSmu : IDisposable
     }
 
     /// <summary>Initializes the session: quiet prompt, binary-hex format, output voltage.</summary>
-    public void Configure(string output, double voltage)
+    public async Task ConfigureAsync(string output, double voltage, CancellationToken cancellationToken = default)
     {
-        Execute("power_monitor");
-        Execute("format", "bin_hexa");
-        Execute("volt", output, voltage);
+        await RunAsync(["power_monitor"], cancellationToken);
+        await RunAsync(["format", "bin_hexa"], cancellationToken);
+        await RunAsync(["volt", output, voltage], cancellationToken);
     }
 
-    public void Power(string output, bool on)
+    public async Task PowerAsync(string output, bool on, CancellationToken cancellationToken = default)
     {
         _logger.LogInformation(on ? "Turning on {Output}" : "Turning off {Output}", output.ToUpperInvariant());
-        Execute("pwr", output, on);
+        await RunAsync(["pwr", output, on], cancellationToken);
     }
 
     /// <summary>
     /// Configures ASCII (decimal) streaming at <paramref name="frequencyHz"/> Hz
     /// with unbounded acquisition time. The current then streams as one line per
-    /// sample after <see cref="StartStream"/> until <see cref="StopStream"/>.
+    /// sample after <see cref="StartStreamAsync"/> until <see cref="StopStreamAsync"/>.
     /// </summary>
-    public void ConfigureStream(int frequencyHz)
+    public async Task ConfigureStreamAsync(int frequencyHz, CancellationToken cancellationToken = default)
     {
-        Execute("power_monitor");
-        Execute("format", "ascii_dec");
-        Execute("freq", frequencyHz.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        Execute("acqtime", "0");
+        await RunAsync(["power_monitor"], cancellationToken);
+        await RunAsync(["format", "ascii_dec"], cancellationToken);
+        await RunAsync(["freq", frequencyHz.ToString(System.Globalization.CultureInfo.InvariantCulture)], cancellationToken);
+        await RunAsync(["acqtime", "0"], cancellationToken);
     }
 
-    public void StartStream() => Send("start");
+    public Task StartStreamAsync(CancellationToken cancellationToken = default) => SendAsync("start", cancellationToken);
 
-    public void StopStream() => Send("stop");
+    public Task StopStreamAsync(CancellationToken cancellationToken = default) => SendAsync("stop", cancellationToken);
 
     /// <summary>Sends a raw command line without waiting for an ack (streaming start/stop).</summary>
-    public void Send(string command)
+    public async Task SendAsync(string command, CancellationToken cancellationToken = default)
     {
         _logger.LogDebug("SMU> {Command}", command);
-        _transport.WriteLine(command);
+        await _transport.WriteLineAsync(command, cancellationToken);
     }
 
-    /// <summary>Reads one line from the device (a sample or metadata), or null on timeout.</summary>
-    public string? ReadLine(TimeSpan timeout) => _transport.ReadLine(timeout);
+    /// <summary>Awaits the next line from the device (a sample or metadata); null at end of stream.</summary>
+    public ValueTask<string?> ReadLineAsync(CancellationToken cancellationToken = default)
+        => _transport.ReadLineAsync(cancellationToken);
 
     /// <summary>
     /// Parses one <c>ascii_dec</c> sample line into amperes: the value is
@@ -138,25 +144,36 @@ public sealed class StlinkSmu : IDisposable
     }
 
     /// <summary>
-    /// Sends one command and waits for its <c>ack</c>. Argument formatting
-    /// matches the extension: numbers become millis with an <c>m</c> suffix,
-    /// booleans become on/off.
+    /// Sends one command and awaits its <c>ack</c>. Argument formatting matches
+    /// the extension: numbers become millis with an <c>m</c> suffix, booleans
+    /// become on/off. Times out (as a <see cref="TimeoutException"/>) if no ack
+    /// arrives within <see cref="CommandTimeout"/>.
     /// </summary>
-    public void Execute(params object[] args)
+    public Task ExecuteAsync(params object[] args) => RunAsync(args, CancellationToken.None);
+
+    private async Task RunAsync(object[] args, CancellationToken cancellationToken)
     {
         var command = string.Join(' ', args.Select(FormatArg));
         _logger.LogDebug("SMU> {Command}", command);
-        _transport.WriteLine(command);
+        await _transport.WriteLineAsync(command, cancellationToken);
 
-        var deadline = DateTime.UtcNow + CommandTimeout;
-        while (DateTime.UtcNow < deadline)
+        // The ack wait is bounded by turning the timeout into a linked cancel, so
+        // there is no sync deadline polling.
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(CommandTimeout);
+        try
         {
-            var line = _transport.ReadLine(deadline - DateTime.UtcNow);
-            if (line == null)
-                break;
-            _logger.LogDebug("SMU< {Line}", line);
-            if (line.StartsWith("ack ", StringComparison.Ordinal) || line == "ack")
-                return;
+            string? line;
+            while ((line = await _transport.ReadLineAsync(timeout.Token)) != null)
+            {
+                _logger.LogDebug("SMU< {Line}", line);
+                if (line.StartsWith("ack ", StringComparison.Ordinal) || line == "ack")
+                    return;
+            }
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            // The ack wait elapsed - fall through to the timeout below.
         }
         throw new TimeoutException($"SMU command timed out: {command}");
     }
@@ -190,39 +207,49 @@ public sealed class TtyTransport : ISmuTransport
             RedirectStandardError = true,
         })?.WaitForExit();
 
-        _stream = new FileStream(port, FileMode.Open, FileAccess.ReadWrite);
+        // Asynchronous so the streaming read is completion-driven (see the async
+        // caveat on ReadLineAsync).
+        _stream = new FileStream(port, FileMode.Open, FileAccess.ReadWrite, FileShare.Read, 4096,
+            FileOptions.Asynchronous);
     }
 
-    public void WriteLine(string line)
+    public async Task WriteLineAsync(string line, CancellationToken cancellationToken = default)
     {
         var bytes = Encoding.ASCII.GetBytes(line + "\n");
-        _stream.Write(bytes);
-        _stream.Flush();
+        await _stream.WriteAsync(bytes, cancellationToken);
+        await _stream.FlushAsync(cancellationToken);
     }
 
-    public string? ReadLine(TimeSpan timeout)
+    // NOTE: on a Linux tty this borrows a thread-pool thread per read (the
+    // runtime has no true async path for character devices); it still avoids a
+    // permanently owned thread and cancels cleanly. A truly async backend (a
+    // socket, an async USB pipe) gets the full benefit unchanged.
+    public async ValueTask<string?> ReadLineAsync(CancellationToken cancellationToken)
     {
-        var deadline = DateTime.UtcNow + timeout;
         var buffer = new byte[256];
-        while (DateTime.UtcNow < deadline)
+        while (true)
         {
-            var newline = _pending.ToString().IndexOf('\n');
-            if (newline >= 0)
-            {
-                var line = _pending.ToString(0, newline).TrimEnd('\r');
-                _pending.Remove(0, newline + 1);
+            if (TryTakeLine(out var line))
                 return line;
-            }
 
-            var readTask = _stream.ReadAsync(buffer.AsMemory());
-            if (!readTask.AsTask().Wait(deadline - DateTime.UtcNow))
-                return null;
-            var n = readTask.Result;
+            var n = await _stream.ReadAsync(buffer, cancellationToken);
             if (n <= 0)
-                return null;
+                return null; // end of stream
             _pending.Append(Encoding.ASCII.GetString(buffer, 0, n));
         }
-        return null;
+    }
+
+    private bool TryTakeLine(out string? line)
+    {
+        var newline = _pending.ToString().IndexOf('\n');
+        if (newline < 0)
+        {
+            line = null;
+            return false;
+        }
+        line = _pending.ToString(0, newline).TrimEnd('\r');
+        _pending.Remove(0, newline + 1);
+        return true;
     }
 
     public void Dispose() => _stream.Dispose();

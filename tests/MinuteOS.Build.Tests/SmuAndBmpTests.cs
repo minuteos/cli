@@ -26,22 +26,26 @@ public class SmuAndBmpTests : IDisposable
     private sealed class FakeTransport : ISmuTransport
     {
         public List<string> Sent = [];
-        public void WriteLine(string line) => Sent.Add(line);
-        public string? ReadLine(TimeSpan timeout) => "ack ok";
+        public Task WriteLineAsync(string line, CancellationToken cancellationToken = default)
+        {
+            Sent.Add(line);
+            return Task.CompletedTask;
+        }
+        public ValueTask<string?> ReadLineAsync(CancellationToken cancellationToken = default) => new("ack ok");
         public void Dispose() { }
     }
 
     [Fact]
-    public void Smu_SpeaksTheV3PwrProtocol()
+    public async Task Smu_SpeaksTheV3PwrProtocol()
     {
         // Matches the extension driver: power_monitor / format bin_hexa /
         // volt <out> <mV>m / pwr <out> on|off, each awaiting an ack.
         var transport = new FakeTransport();
         using var smu = new StlinkSmu(transport, NullLogger.Instance);
 
-        smu.Configure("vout", 3.3);
-        smu.Power("vout", on: true);
-        smu.Power("vout", on: false);
+        await smu.ConfigureAsync("vout", 3.3);
+        await smu.PowerAsync("vout", on: true);
+        await smu.PowerAsync("vout", on: false);
 
         Assert.Equal(
             ["power_monitor", "format bin_hexa", "volt vout 3300m", "pwr vout on", "pwr vout off"],
@@ -49,17 +53,16 @@ public class SmuAndBmpTests : IDisposable
     }
 
     [Fact]
-    public void Smu_TimesOutWithoutAck()
+    public async Task Smu_TimesOutWithoutAck()
     {
-        var transport = new FakeTransport();
         using var smu = new StlinkSmu(new NoAckTransport(), NullLogger.Instance);
-        Assert.Throws<TimeoutException>(() => smu.Execute("pwr", "vout", true));
+        await Assert.ThrowsAsync<TimeoutException>(() => smu.ExecuteAsync("pwr", "vout", true));
     }
 
     private sealed class NoAckTransport : ISmuTransport
     {
-        public void WriteLine(string line) { }
-        public string? ReadLine(TimeSpan timeout) => null;
+        public Task WriteLineAsync(string line, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public ValueTask<string?> ReadLineAsync(CancellationToken cancellationToken = default) => new((string?)null);
         public void Dispose() { }
     }
 
