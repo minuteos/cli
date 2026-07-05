@@ -21,6 +21,11 @@ public sealed class TraceRecorder : IAsyncDisposable
     private readonly TraceWriter _writer;
     private readonly long _startTimestamp;
     private readonly Timer _flushTimer;
+    // Producers (PC-sampler, SWO reader, SMU thread) serialize here so the
+    // timestamp is sampled in the same order records are written, and so no write
+    // can race Dispose. Held only for the few varints of one record.
+    private readonly object _sync = new();
+    private bool _disposed;
     private ISmuSampleSource? _attached;
     private long _eventCount;
 
@@ -45,38 +50,62 @@ public sealed class TraceRecorder : IAsyncDisposable
 
     public void RecordPc(uint pc)
     {
-        _writer.WritePc(NowNs(), pc);
-        Count();
+        lock (_sync)
+        {
+            if (_disposed) return;
+            _writer.WritePc(NowNs(), pc);
+            Count();
+        }
     }
 
     public void RecordPcSleep()
     {
-        _writer.WritePcSleep(NowNs());
-        Count();
+        lock (_sync)
+        {
+            if (_disposed) return;
+            _writer.WritePcSleep(NowNs());
+            Count();
+        }
     }
 
     public void RecordLog(int port, ReadOnlySpan<byte> data)
     {
-        _writer.WriteLog(NowNs(), port, data);
-        Count();
+        lock (_sync)
+        {
+            if (_disposed) return;
+            _writer.WriteLog(NowNs(), port, data);
+            Count();
+        }
     }
 
     public void RecordMeasurement(int channel, long raw)
     {
-        _writer.WriteMeasurement(NowNs(), channel, raw);
-        Count();
+        lock (_sync)
+        {
+            if (_disposed) return;
+            _writer.WriteMeasurement(NowNs(), channel, raw);
+            Count();
+        }
     }
 
     public void DefineChannel(int channel, ChannelKind kind, double scale, string name, string unit)
     {
-        _writer.DefineChannel(NowNs(), channel, kind, scale, name, unit);
-        Count();
+        lock (_sync)
+        {
+            if (_disposed) return;
+            _writer.DefineChannel(NowNs(), channel, kind, scale, name, unit);
+            Count();
+        }
     }
 
     public void Mark(MarkKind kind, string text = "")
     {
-        _writer.WriteMark(NowNs(), kind, text);
-        Count();
+        lock (_sync)
+        {
+            if (_disposed) return;
+            _writer.WriteMark(NowNs(), kind, text);
+            Count();
+        }
     }
 
     /// <summary>
@@ -112,12 +141,21 @@ public sealed class TraceRecorder : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        // Awaiting the timer's disposal drains any in-flight flush callback, so
-        // nothing touches the writer or file after this point.
+        // Drain any in-flight flush callback first.
         await _flushTimer.DisposeAsync();
         if (_attached != null)
             _attached.Sample -= OnSmuSample;
-        _writer.Flush();
+
+        // Take the writer lock to (a) let any producer mid-record finish and
+        // (b) block later ones via _disposed, so nothing writes after the file is
+        // closed - the unsubscribe above does not stop a callback already running.
+        lock (_sync)
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            _writer.Flush();
+        }
         await _file.DisposeAsync();
     }
 
