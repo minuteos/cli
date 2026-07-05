@@ -124,7 +124,12 @@ public sealed class StlinkDap : IDebugAccessPort
                 cmd[1] = 0x07;
                 BinaryPrimitives.WriteUInt32LittleEndian(cmd[2..], start);
                 BinaryPrimitives.WriteUInt16LittleEndian(cmd[6..], (ushort)len);
-            }, respLength: len, cancellationToken: cancellationToken) ?? [];
+            }, respLength: len, cancellationToken: cancellationToken);
+            // A timeout (null) or short read must surface, not silently advance
+            // start and hand gdb truncated/misaligned memory.
+            if (block == null || block.Length < len)
+                throw new IOException(
+                    $"ST-Link memory read at 0x{start:x8} returned {block?.Length ?? 0}/{len} bytes");
             chunks.AddRange(block);
             start += (uint)len;
         }

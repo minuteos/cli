@@ -23,6 +23,7 @@ public abstract class InternalGdbServer
     private TcpListener? _listener;
     private CancellationTokenSource? _cts;
     private readonly List<Task> _connections = [];
+    private readonly object _connectionsLock = new();
 
     protected ILogger Logger { get; }
 
@@ -53,7 +54,16 @@ public abstract class InternalGdbServer
             while (!token.IsCancellationRequested)
             {
                 var socket = await _listener!.AcceptTcpClientAsync(token);
-                _connections.Add(new Connection(this, socket, Logger).RunAsync());
+                var connection = new Connection(this, socket, Logger).RunAsync();
+                lock (_connectionsLock)
+                    _connections.Add(connection);
+                // Drop finished connections so a long-lived server doesn't leak
+                // completed tasks across reconnects.
+                _ = connection.ContinueWith(t =>
+                {
+                    lock (_connectionsLock)
+                        _connections.Remove(t);
+                }, TaskScheduler.Default);
             }
         }
         catch (OperationCanceledException) { /* stopping */ }
@@ -65,7 +75,10 @@ public abstract class InternalGdbServer
         if (_cts != null)
             await _cts.CancelAsync();
         _listener?.Stop();
-        try { await Task.WhenAll(_connections); } catch { /* best effort */ }
+        Task[] pending;
+        lock (_connectionsLock)
+            pending = [.. _connections];
+        try { await Task.WhenAll(pending); } catch { /* best effort */ }
         _cts?.Dispose();
     }
 

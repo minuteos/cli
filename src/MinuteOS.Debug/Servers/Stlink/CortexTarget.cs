@@ -49,7 +49,17 @@ public sealed class CortexTarget : IDebugTarget
         Threads[0].StopReason = null;
     }
 
-    public Task ResetAsync(CancellationToken cancellationToken = default) => Task.CompletedTask; // TODO
+    public async Task ResetAsync(CancellationToken cancellationToken = default)
+    {
+        // Reset-and-halt: arm the reset vector catch (DEMCR.VC_CORERESET, plus
+        // TRCENA) so the core halts at the reset handler, then request a system
+        // reset (AIRCR.SYSRESETREQ under the VECTKEY). Hardware-unverified.
+        const uint aircr = 0xE000ED0C, demcr = 0xE000EDFC;
+        _registerCache = [];
+        await _dap.WriteMemoryAsync(demcr, BitConverter.GetBytes(0x0100_0001u), cancellationToken);
+        await _dap.WriteMemoryAsync(aircr, BitConverter.GetBytes(0x05FA_0004u), cancellationToken);
+        Threads[0].StopReason = StopSignal.Trap;
+    }
 
     public async Task<bool> BreakpointAsync(bool set, uint address, int kind, CancellationToken cancellationToken = default)
     {
@@ -70,13 +80,14 @@ public sealed class CortexTarget : IDebugTarget
         for (var i = 0; i < fpb.Length; i += 4)
         {
             var cmp = BinaryPrimitives.ReadUInt32LittleEndian(fpb.AsSpan(i));
-            if ((cmp & 1) != 0)
+            if ((cmp & 1) == 0)
             {
+                // FP_COMP bit0 is ENABLE: a cleared comparator is a free slot.
                 empty ??= i;
-                BinaryPrimitives.WriteUInt32LittleEndian(fpb.AsSpan(i), 0);
             }
             else if ((cmp & 0x3FFFFFFC) == baseAddr)
             {
+                // An enabled comparator already covering this base address.
                 match = i;
                 matchCmp = cmp;
                 break;
@@ -129,9 +140,12 @@ public sealed class CortexTarget : IDebugTarget
         if ((single is null || single < CortexRegisters.CoreCount) && _registerCache[0] == null)
         {
             var core = await _dap.ReadCoreRegistersAsync(cancellationToken);
-            for (var w = 0; w < core.Length; w++)
+            // The block is r0-r15, xpsr, msp, psp, cfbp (20 words). Word 19 (cfbp)
+            // maps to gdb's 'spr' (0x14); gdb index 19 is unused. Cap at 20 so any
+            // trailing padding word can't collide onto 0x14.
+            for (var w = 0; w < core.Length && w < 20; w++)
             {
-                var gdb = w <= 18 ? w : 20; // ST-Link's cfbp word maps to the 'spr' register (index 0x14)
+                var gdb = w <= 18 ? w : 20;
                 if (gdb < _registerCache.Length)
                     _registerCache[gdb] = core[w];
             }
