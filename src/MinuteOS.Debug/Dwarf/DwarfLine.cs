@@ -59,7 +59,16 @@ public sealed class DwarfLine
         while (c.Remaining > 0)
             ParseUnit(c, lineStr, str, rows);
 
-        rows.Sort((a, b) => a.Address.CompareTo(b.Address));
+        // Sort by address; at an equal address (an end_sequence marker landing on
+        // the next unit's first real row after linking) put the null marker first
+        // so Resolve - which returns the last row <= pc - keeps the real line.
+        rows.Sort((a, b) =>
+        {
+            var byAddress = a.Address.CompareTo(b.Address);
+            return byAddress != 0
+                ? byAddress
+                : (a.Row == null ? 0 : 1).CompareTo(b.Row == null ? 0 : 1);
+        });
         return new DwarfLine(rows.Select(r => r.Address).ToArray(), rows.Select(r => r.Row).ToArray());
     }
 

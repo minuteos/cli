@@ -134,14 +134,20 @@ public sealed class ElfSymbols
         functions.Sort((a, b) => a.Address.CompareTo(b.Address));
 
         // Zero-size symbols (assembly labels): extend to the next symbol so
-        // samples inside them still resolve.
+        // samples inside them still resolve - but only when they fill a gap. A
+        // label sitting inside an already-sized function must not be stretched
+        // over it, or it would shadow the real function during lookup.
+        var coveredTo = 0ul;
         for (var i = 0; i < functions.Count; i++)
         {
             if (functions[i].Size == 0)
             {
+                if (functions[i].Address < coveredTo)
+                    continue; // interior label - leave size 0 (filtered out below)
                 var end = i + 1 < functions.Count ? functions[i + 1].Address : functions[i].Address + 2;
                 functions[i] = functions[i] with { Size = end - functions[i].Address };
             }
+            coveredTo = Math.Max(coveredTo, functions[i].Address + functions[i].Size);
         }
 
         return new ElfSymbols(functions.Where(f => f.Size > 0).ToArray(), thumb);
