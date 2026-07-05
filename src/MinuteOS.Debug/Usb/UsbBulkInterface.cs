@@ -40,9 +40,10 @@ internal sealed class UsbBulkInterface : IDisposable
         EmbeddedNativeLibrary.Ensure("libusb-1.0", logger);
 
         var context = new UsbContext();
+        IUsbDevice? device = null;
         try
         {
-            var device = context.Find(d => d.VendorId == vendorId && productIds.Contains((ushort)d.ProductId)
+            device = context.Find(d => d.VendorId == vendorId && productIds.Contains((ushort)d.ProductId)
                     && (serial == null || SerialOf(d) == serial))
                 ?? throw new InvalidOperationException(
                     $"No {description} found - is it connected" + (serial != null ? $" (serial {serial})?" : "?"));
@@ -74,20 +75,28 @@ internal sealed class UsbBulkInterface : IDisposable
         }
         catch
         {
+            // The opened device is separately owned (see Dispose), so close it too
+            // - disposing only the context would leak the handle / claimed interface.
+            device?.Dispose();
             context.Dispose();
             throw;
         }
     }
 
     /// <summary>
-    /// CDC SET_CONTROL_LINE_STATE - asserts DTR/RTS on the claimed interface so a
-    /// CDC-ACM device starts transmitting (the kernel driver would normally do
-    /// this on tty open). Best-effort; some devices/stacks don't require it.
+    /// CDC SET_CONTROL_LINE_STATE - asserts DTR/RTS so a CDC-ACM device starts
+    /// transmitting (the kernel driver would normally do this on tty open).
+    /// Best-effort; some devices/stacks don't require it.
     /// </summary>
     public void SetControlLineState(bool dtr, bool rts)
     {
+        // SET_CONTROL_LINE_STATE (bmRequestType 0x21, bRequest 0x22) is a
+        // Communications-interface request. We claim the CDC-Data interface (it
+        // owns the bulk endpoints), and in the standard CDC-ACM function the paired
+        // control interface immediately precedes it, so target _number - 1.
+        var commsInterface = _number > 0 ? _number - 1 : _number;
         var value = (short)((dtr ? 1 : 0) | (rts ? 2 : 0));
-        var setup = new UsbSetupPacket(0x21, 0x22, value, (short)_number, 0);
+        var setup = new UsbSetupPacket(0x21, 0x22, value, (short)commsInterface, 0);
         _device.ControlTransfer(setup, Array.Empty<byte>(), 0, 0);
     }
 
@@ -116,19 +125,24 @@ internal sealed class UsbBulkInterface : IDisposable
 
     private static string? SerialOf(IUsbDevice device)
     {
+        var wasOpen = device.IsOpen;
         try
         {
-            var wasOpen = device.IsOpen;
             if (!wasOpen)
                 device.Open();
             var serial = device.Info.SerialNumber;
-            if (!wasOpen)
-                device.Close();
             return string.IsNullOrEmpty(serial) ? null : serial;
         }
         catch
         {
             return null;
+        }
+        finally
+        {
+            // Close only if we opened it, even when reading the serial threw -
+            // otherwise enumeration leaks the handle of every probed device.
+            if (!wasOpen && device.IsOpen)
+                device.Close();
         }
     }
 
