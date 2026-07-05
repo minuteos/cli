@@ -26,6 +26,8 @@ public sealed class StlinkSmuSampleSource : ISmuSampleSource
     private readonly CancellationTokenSource _cts = new();
     private Task? _reader;
     private long _samples;
+    private int _stopping;
+    private int _disposed;
 
     public StlinkSmuSampleSource(StlinkSmu smu, string output, int frequencyHz, ILogger logger)
     {
@@ -56,6 +58,8 @@ public sealed class StlinkSmuSampleSource : ISmuSampleSource
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
+        if (Interlocked.Exchange(ref _stopping, 1) != 0)
+            return; // idempotent: a second stop/dispose must not re-cancel the CTS
         await _cts.CancelAsync();
         // Halt the byte flow first so a read blocked on the next sample completes,
         // then drain the loop.
@@ -101,11 +105,30 @@ public sealed class StlinkSmuSampleSource : ISmuSampleSource
             if (_cts.IsCancellationRequested || !StlinkSmu.TryParseAmps(line, out var amps))
                 continue;
 
+            // Reject NaN/Infinity and implausible magnitudes (a garbage line with a
+            // huge exponent) instead of letting the unchecked (long) cast wrap to
+            // long.MinValue and poison the track. Max V3PWR current is ~5 A.
+            var nanoAmps = amps * 1e9;
+            if (!double.IsFinite(nanoAmps) || Math.Abs(nanoAmps) > 9.0e18)
+                continue;
+
             Interlocked.Increment(ref _samples);
+            Dispatch(new SmuSample(CurrentChannel, (long)Math.Round(nanoAmps)));
+        }
+    }
+
+    // Invoke each subscriber independently so one throwing handler (e.g. a
+    // recorder file-write fault) doesn't starve the others of the sample - a
+    // single multicast Invoke stops at the first exception.
+    private void Dispatch(SmuSample sample)
+    {
+        if (Sample is not { } handlers)
+            return;
+        foreach (var handler in handlers.GetInvocationList())
+        {
             try
             {
-                // A faulting consumer must not kill the reader.
-                Sample?.Invoke(new SmuSample(CurrentChannel, (long)Math.Round(amps * 1e9)));
+                ((Action<SmuSample>)handler)(sample);
             }
             catch (Exception ex)
             {
@@ -130,6 +153,8 @@ public sealed class StlinkSmuSampleSource : ISmuSampleSource
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
         await StopAsync();
         _cts.Dispose();
     }

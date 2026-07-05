@@ -63,15 +63,10 @@ public sealed class UsbCdcTransport : ISmuTransport
             if (TryTakeLine(out var line))
                 return line;
 
-            int count;
-            try
-            {
-                count = await _stream.ReadAsync(_readBuffer, cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                return null;
-            }
+            // Let cancellation propagate (do NOT map it to null/EOF): callers
+            // distinguish a cancelled read from a closed stream, and the command
+            // path relies on the OperationCanceledException to surface.
+            var count = await _stream.ReadAsync(_readBuffer, cancellationToken);
             if (count <= 0)
                 return null; // stream closed
 
