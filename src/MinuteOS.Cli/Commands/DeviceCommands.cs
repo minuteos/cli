@@ -74,9 +74,9 @@ public abstract class DeviceCommandBase : LoggingCommand
         if (spec == null)
             Logger.LogError(
                 "Configuration '{Config}' has no '{Op}' step. Add one to the board target, e.g.:\n" +
-                "  steps:\n    - name: {Op}\n      phase: Device\n      config:\n" +
+                "  steps:\n    - name: {OpName}\n      phase: Device\n      config:\n" +
                 "        command: openocd\n        args: '-f board.cfg ...'",
-                config.Name, operation);
+                config.Name, operation, operation);
         return spec;
     }
 }
