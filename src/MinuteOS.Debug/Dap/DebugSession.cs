@@ -28,7 +28,7 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
     private bool _launch;
     private bool _stopAtConnect;
     private bool _configured;
-    private bool _terminated;
+    private volatile bool _terminated;
     private Cortex? _cortex;
     private Task<Svd.SvdDevice?>? _svdTask;
     private Swo.SwoSession? _swoSession;
@@ -53,9 +53,14 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
     private readonly Dictionary<string, List<JsonObject>> _breakpointMap = [];
     private readonly List<JsonObject> _instructionBreakpoints = [];
 
+    // SendExecEvents runs both from request threads and the MI background thread
+    // (Gdb.ThreadsChanged), so _vsThreads is guarded by _execLock; the suppress
+    // flag is volatile because it is written on a request thread and read on the
+    // MI thread.
     private readonly Dictionary<int, bool> _vsThreads = [];
+    private readonly object _execLock = new();
     private int _interrupted;
-    private int _suppressExecEvents;
+    private volatile int _suppressExecEvents;
 
     private Probe Probe => _probe ?? throw new InvalidOperationException("Not connected");
     private MiClient Gdb => Probe.Gdb;
@@ -265,6 +270,12 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
             _timeline?.OnSwoPacket(TimelineNowNs(), packet);
         }, logger);
         await _swoSession.StartAsync(cancellationToken);
+
+        // swo.profile makes the profiler a standing owner of PC sampling; take a
+        // refcount so a timeline start/stop cycle can't clear the DWT PC-sample
+        // bit out from under it. (Acquire needs _swoSession, hence after start.)
+        if (swoConfig.PcSample)
+            await AcquirePcSamplingAsync(cancellationToken);
     }
 
     // #region Profiling (minuteos.profile.* custom requests)
@@ -358,9 +369,20 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
             ?? Path.Combine(_cwd ?? Environment.CurrentDirectory, "trace.mtrace"));
 
         _recorder = new Trace.TraceRecorder(path);
-        var smu = await AcquireSmuAsync(cancellationToken);
-        foreach (var channel in smu.Channels)
-            _recorder.DefineChannel(channel.Id, channel.Kind, channel.Scale, channel.Name, channel.Unit);
+        try
+        {
+            var smu = await AcquireSmuAsync(cancellationToken);
+            foreach (var channel in smu.Channels)
+                _recorder.DefineChannel(channel.Id, channel.Kind, channel.Scale, channel.Name, channel.Unit);
+        }
+        catch
+        {
+            // Don't leave a half-started recorder wedging every future trace.start.
+            var partial = _recorder;
+            _recorder = null;
+            await partial.DisposeAsync();
+            throw;
+        }
         await SendOutputAsync("console", $"Recording timeline to {path}\n");
         return new JsonObject { ["path"] = path };
     }
@@ -433,12 +455,24 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
         _timeline = new Trace.TimelineStore();
         _timelineStart = System.Diagnostics.Stopwatch.GetTimestamp();
         _symbolizer ??= Trace.Symbolizer.TryLoad(_programPath);
-        // Populate the PC pie without a separate "start profiling" step (no-op
-        // when there is no SWO to sample from).
-        await AcquirePcSamplingAsync(cancellationToken);
-        var smu = await AcquireSmuAsync(cancellationToken);
-        foreach (var channel in smu.Channels)
-            _timeline.DefineChannel(channel.Id, channel.Scale, channel.Name, channel.Unit);
+        try
+        {
+            // Populate the PC pie without a separate "start profiling" step (no-op
+            // when there is no SWO to sample from).
+            await AcquirePcSamplingAsync(cancellationToken);
+            var smu = await AcquireSmuAsync(cancellationToken);
+            foreach (var channel in smu.Channels)
+                _timeline.DefineChannel(channel.Id, channel.Scale, channel.Name, channel.Unit);
+        }
+        catch
+        {
+            // Don't leave a half-started timeline that no-ops every future start;
+            // undo whichever acquire succeeded (releases guard on refcount == 0).
+            _timeline = null;
+            try { await ReleasePcSamplingAsync(cancellationToken); } catch { /* best effort */ }
+            try { await ReleaseSmuAsync(cancellationToken); } catch { /* best effort */ }
+            throw;
+        }
         StartTimelineTicks();
         return new JsonObject { ["running"] = true };
     }
@@ -639,45 +673,49 @@ public sealed class DebugSession(DapConnection connection, ILogger logger) : IAs
     {
         // A late thread-state notification can arrive after teardown (the
         // ThreadsChanged subscription outlives the probe); ignore it rather than
-        // touch the disposed gdb.
-        if (_suppressExecEvents > 0 || _terminated || _probe is null)
-            return;
-
-        var seen = new HashSet<int>();
-        foreach (var thread in Gdb.Threads)
+        // touch the disposed gdb. The lock serializes the request-thread and
+        // MI-background-thread callers against _vsThreads.
+        lock (_execLock)
         {
-            seen.Add(thread.ThreadId);
-            var known = _vsThreads.TryGetValue(thread.ThreadId, out var wasStopped);
-            if (!known)
-                _ = connection.SendEventAsync("thread", new JsonObject
-                {
-                    ["reason"] = "started",
-                    ["threadId"] = thread.ThreadId,
-                });
-            if (!known || wasStopped != thread.Stopped)
+            if (_suppressExecEvents > 0 || _terminated || _probe is null)
+                return;
+
+            var seen = new HashSet<int>();
+            foreach (var thread in Gdb.Threads)
             {
-                _vsThreads[thread.ThreadId] = thread.Stopped;
-                _ = thread.Stopped
-                    ? connection.SendEventAsync("stopped", new JsonObject
+                seen.Add(thread.ThreadId);
+                var known = _vsThreads.TryGetValue(thread.ThreadId, out var wasStopped);
+                if (!known)
+                    _ = connection.SendEventAsync("thread", new JsonObject
                     {
-                        ["reason"] = MapStopReason(thread),
-                        ["threadId"] = thread.ThreadId,
-                    })
-                    : connection.SendEventAsync("continued", new JsonObject
-                    {
+                        ["reason"] = "started",
                         ["threadId"] = thread.ThreadId,
                     });
+                if (!known || wasStopped != thread.Stopped)
+                {
+                    _vsThreads[thread.ThreadId] = thread.Stopped;
+                    _ = thread.Stopped
+                        ? connection.SendEventAsync("stopped", new JsonObject
+                        {
+                            ["reason"] = MapStopReason(thread),
+                            ["threadId"] = thread.ThreadId,
+                        })
+                        : connection.SendEventAsync("continued", new JsonObject
+                        {
+                            ["threadId"] = thread.ThreadId,
+                        });
+                }
             }
-        }
 
-        foreach (var id in _vsThreads.Keys.Where(id => !seen.Contains(id)).ToList())
-        {
-            _vsThreads.Remove(id);
-            _ = connection.SendEventAsync("thread", new JsonObject
+            foreach (var id in _vsThreads.Keys.Where(id => !seen.Contains(id)).ToList())
             {
-                ["reason"] = "exited",
-                ["threadId"] = id,
-            });
+                _vsThreads.Remove(id);
+                _ = connection.SendEventAsync("thread", new JsonObject
+                {
+                    ["reason"] = "exited",
+                    ["threadId"] = id,
+                });
+            }
         }
     }
 
