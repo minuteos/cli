@@ -41,11 +41,13 @@ public static class MiParser
 
         var pos = 0;
 
-        // Token: leading digits.
+        // Token: leading digits. A run too long for an int is not one of our
+        // tokens (they come from a small counter) - treat it as untoken rather
+        // than throwing, which would otherwise kill the MI receiver loop.
         var tokenStart = pos;
         while (pos < line.Length && line[pos] is >= '0' and <= '9')
             pos++;
-        int? token = pos > tokenStart ? int.Parse(line[tokenStart..pos]) : null;
+        int? token = pos > tokenStart && int.TryParse(line[tokenStart..pos], out var t) ? t : null;
 
         if (pos >= line.Length)
             return null;

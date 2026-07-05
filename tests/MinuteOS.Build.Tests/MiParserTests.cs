@@ -16,6 +16,18 @@ public class MiParserTests
     }
 
     [Fact]
+    public void OverlongDigitPrefix_DoesNotThrow()
+    {
+        // A line starting with a digit run too large for an int must not throw
+        // (int.Parse would) - that would kill the MI receiver loop and hang every
+        // command. It is simply not one of our tokens.
+        var record = MiParser.Parse("99999999999999999999^done");
+        Assert.NotNull(record);
+        Assert.Equal(MiRecordType.Result, record.Type);
+        Assert.Null(record.Token);
+    }
+
+    [Fact]
     public void ConsoleStream_UnescapesText()
     {
         var record = MiParser.Parse("~\"GNU gdb (GDB) 13.2\\n\"");

@@ -43,6 +43,7 @@ public sealed class MiClient : IAsyncDisposable
 
     private readonly object _sync = new();
     private PendingCommand? _pending;
+    private bool _receiverDead;
     private TaskCompletionSource<bool>? _idleSignal;
     private readonly List<MiThreadState> _threads = [];
     private readonly List<(Func<IReadOnlyList<MiThreadState>, bool> Predicate, TaskCompletionSource Tcs)> _threadWaiters = [];
@@ -103,9 +104,10 @@ public sealed class MiClient : IAsyncDisposable
             }
             Exited?.Invoke();
         };
+        var stderr = _process.StandardError; // capture: DisposeAsync nulls _process
         _ = Task.Run(async () =>
         {
-            while (await _process.StandardError.ReadLineAsync() is { } line)
+            while (await stderr.ReadLineAsync() is { } line)
                 _logger.LogWarning("gdb: {Line}", line);
         }, CancellationToken.None);
         _receiver = Task.Run(ReceiverAsync, CancellationToken.None);
@@ -117,17 +119,39 @@ public sealed class MiClient : IAsyncDisposable
     private async Task ReceiverAsync()
     {
         var stdout = _process!.StandardOutput;
+        Exception? fault = null;
         try
         {
             while (await stdout.ReadLineAsync() is { } line)
-                ProcessLine(line.TrimEnd('\r'));
+            {
+                // One malformed line must never kill the receiver: if it did, no
+                // response would ever be read again and every command would hang.
+                try
+                {
+                    ProcessLine(line.TrimEnd('\r'));
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to process MI line: {Line}", line);
+                }
+            }
         }
         catch (Exception ex)
         {
+            fault = ex;
             _logger.LogDebug(ex, "MI receiver terminated");
         }
+
+        // The output stream has closed (or the reader faulted): no further result
+        // will arrive, so fail the in-flight command and mark the client dead
+        // rather than leaving callers awaiting forever.
         lock (_sync)
-            _idleSignal?.TrySetException(new InvalidOperationException("GDB is gone"));
+        {
+            _receiverDead = true;
+            var ex = fault ?? new InvalidOperationException("GDB output stream closed");
+            _pending?.Tcs.TrySetException(ex);
+            _idleSignal?.TrySetException(ex);
+        }
     }
 
     private void ProcessLine(string line)
@@ -173,7 +197,14 @@ public sealed class MiClient : IAsyncDisposable
                     return;
                 }
                 if (record.Token is { } token && token != cmd.Token)
-                    _logger.LogWarning("MI token mismatch: got {Got}, expected {Expected}", token, cmd.Token);
+                {
+                    // A stale result from a cancelled/previous command. Applying it
+                    // to the current pending command would hand the caller another
+                    // command's result - drop it and let the real result arrive.
+                    _logger.LogWarning("MI token mismatch: got {Got}, expected {Expected}; ignoring stale result",
+                        token, cmd.Token);
+                    return;
+                }
 
                 var result = new MiResult
                 {
@@ -336,7 +367,11 @@ public sealed class MiClient : IAsyncDisposable
         try
         {
             lock (_sync)
+            {
+                if (_receiverDead)
+                    throw new InvalidOperationException("GDB output stream has closed");
                 _pending = pending;
+            }
             var line = $"{token}-{command}";
             _logger.LogTrace("mi> {Line}", line);
             if (_process == null || _process.HasExited)
@@ -432,6 +467,12 @@ public sealed class MiClient : IAsyncDisposable
         if (process == null)
             return;
         _process = null;
+
+        // Serialize the graceful-exit write against any in-flight ExecuteAsync
+        // write on the same (non-thread-safe) stdin. If a command is wedged
+        // holding the gate, fall through after a short wait and kill.
+        var gated = false;
+        try { gated = await _commandGate.WaitAsync(TimeSpan.FromSeconds(2)); } catch { /* disposed */ }
         try
         {
             if (!process.HasExited)
@@ -448,6 +489,11 @@ public sealed class MiClient : IAsyncDisposable
             }
         }
         catch { /* already gone */ }
+        finally
+        {
+            if (gated)
+                _commandGate.Release();
+        }
         if (_receiver != null)
             await _receiver;
         process.Dispose();
